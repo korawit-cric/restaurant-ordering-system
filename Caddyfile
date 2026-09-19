@@ -1,0 +1,16 @@
+{$PUBLIC_HOST} {
+  encode gzip
+  header {
+    X-Content-Type-Options nosniff
+    Referrer-Policy same-origin
+    X-Frame-Options DENY
+  }
+  handle_path /api/* {
+    reverse_proxy api:3011 {
+      flush_interval -1
+    }
+  }
+  handle {
+    reverse_proxy web:3010
+  }
+}

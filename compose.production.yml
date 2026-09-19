@@ -1,0 +1,65 @@
+name: restaurant-ordering-system-poc
+x-app: &app
+  image: restaurant-ordering-system-poc:local
+  build: .
+  env_file: .env
+  restart: unless-stopped
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set a strong database password}
+      POSTGRES_DB: ${DB_NAME:-restaurant_ordering}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  migrate:
+    <<: *app
+    restart: 'no'
+    command: ['npm', 'run', 'db:deploy']
+    environment:
+      DATABASE_URL: ${PRODUCTION_DATABASE_URL:?Set PostgreSQL URL with host postgres}
+    depends_on:
+      postgres:
+        condition: service_healthy
+  api:
+    <<: *app
+    command: ['node', 'apps/api/dist/main.js']
+    environment:
+      NODE_ENV: production
+      API_PORT: 3011
+      DATABASE_URL: ${PRODUCTION_DATABASE_URL}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  web:
+    <<: *app
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:3011
+    depends_on:
+      - api
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?Set the public hostname}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

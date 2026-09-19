@@ -1,0 +1,70 @@
+{
+  "name": "restaurant-ordering-system-poc",
+  "version": "0.0.0",
+  "private": true,
+  "description": "",
+  "author": "",
+  "license": "UNLICENSED",
+  "scripts": {
+    "postinstall": "node scripts/setup-env.js",
+    "predev": "node scripts/distribute-env.js",
+    "dev": "turbo run dev --env-mode=loose",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "test:e2e": "playwright test",
+    "lint": "turbo run lint && prettier --check \"**/*.{ts,tsx,json,md}\"",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "db:start": "./scripts/db-start.sh",
+    "db:stop": "./scripts/db-stop.sh",
+    "db:up": "npm run db:start",
+    "db:down": "npm run db:stop",
+    "db:logs": "docker compose --env-file .env -f apps/db/docker-compose.yml logs -f postgres",
+    "db:ps": "docker compose --env-file .env -f apps/db/docker-compose.yml ps",
+    "db:generate": "cd packages/prisma && npm run db:generate",
+    "db:push": "cd packages/prisma && npm run db:push",
+    "db:migrate": "cd packages/prisma && npm run db:migrate",
+    "db:seed": "cd packages/prisma && npm run db:seed",
+    "db:studio": "cd packages/prisma && npm run db:studio",
+    "env:setup": "node scripts/setup-env.js",
+    "env:distribute": "node scripts/distribute-env.js",
+    "prepare": "husky",
+    "check-types": "turbo run check-types",
+    "db:deploy": "npm run db:deploy -w @repo/prisma",
+    "test:integration": "node scripts/integration-test.cjs"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.2.0",
+    "@commitlint/config-conventional": "^20.2.0",
+    "@playwright/test": "^1.63.0",
+    "@repo/eslint-config": "*",
+    "@repo/typescript-config": "*",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "prettier": "^3.2.5",
+    "prettier-plugin-tailwindcss": "^0.7.2",
+    "turbo": "^2.6.3"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "packageManager": "npm@10.2.3",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "lint-staged": {
+    "*.{ts,tsx,mjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,css,yml,yaml,js}": [
+      "prettier --write"
+    ]
+  },
+  "overrides": {
+    "multer": "^2.4.0",
+    "deepmerge-ts": "^8.0.2",
+    "mysql2": "^3.24.4",
+    "ajv@>=8": "^8.20.0"
+  }
+}

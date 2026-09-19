@@ -1,0 +1,47 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "globalDependencies": ["**/.env.*local"],
+  "globalEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "API_PORT",
+    "API_INTERNAL_URL",
+    "APP_ORIGIN",
+    "PROMPTPAY_QR_URL",
+    "PAYMENT_RECIPIENT",
+    "ADMIN_EMAIL",
+    "ADMIN_PASSWORD",
+    "STAFF_EMAIL",
+    "STAFF_PASSWORD"
+  ],
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"],
+      "env": ["NEXT_PUBLIC_API_URL"]
+    },
+    "db:generate": {
+      "cache": false
+    },
+    "build:components": {
+      "dependsOn": ["^build"]
+    },
+    "build:styles": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {
+      "dependsOn": ["^build"]
+    },
+    "check-types": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "test:e2e": {}
+  }
+}
