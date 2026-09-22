@@ -71,14 +71,14 @@ export function ResetPassword({ token }: { token: string }) {
         ORDERLY
       </Link>
       <h1>Choose a new password</h1>
-      {!token ? (
-        <p>This reset link is incomplete.</p>
-      ) : done ? (
+      {!token && <p>This reset link is incomplete.</p>}
+      {token && done && (
         <p>
           Password changed. All previous sessions were signed out.{' '}
           <Link href="/staff/login">Sign in</Link> with the new password.
         </p>
-      ) : (
+      )}
+      {token && !done && (
         <form
           className="panel"
           onSubmit={(event) => {
