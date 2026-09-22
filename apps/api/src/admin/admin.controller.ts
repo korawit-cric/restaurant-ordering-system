@@ -1,148 +1,161 @@
 import {
+  Body,
   Controller,
   Get,
   Post,
   Patch,
-  Delete,
   Param,
-  Body,
+  Req,
   UseGuards,
   NotFoundException,
-  Res,
   ConflictException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
-import type { Response } from 'express';
-import QRCode from 'qrcode';
 import { z } from 'zod';
-import { Prisma } from '@repo/prisma';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuthGuard, AdminGuard } from '../security/auth';
+import { AuthRequest, MemberGuard, requireRole } from '../security/auth';
 import { parse } from '../orders/rules';
 const name = z.string().trim().min(1).max(100);
 const category = z
   .object({
     name,
-    sortOrder: z.number().int().min(0).max(9999),
-    active: z.boolean(),
+    sortOrder: z.number().int().min(0).max(9999).default(0),
+    active: z.boolean().default(true),
   })
   .strict();
-const menuItem = z
+const product = z
   .object({
     name,
-    categoryId: z.string().min(1),
-    price: z.string().regex(/^\d{1,6}(\.\d{1,2})?$/),
-    description: z.string().max(500).nullable(),
+    categoryId: z.string().uuid(),
+    price: z.string().regex(/^\d{1,8}(\.\d{1,2})?$/),
+    description: z.string().max(500).nullable().optional(),
     imageUrl: z
       .string()
+      .url()
       .max(2000)
-      .refine((v) => !v || /^https:\/\//.test(v), 'Use an HTTPS image URL')
-      .nullable(),
-    active: z.boolean(),
-    available: z.boolean(),
-    sortOrder: z.number().int().min(0).max(9999),
+      .refine((v) => v.startsWith('https://'), 'Use HTTPS')
+      .nullable()
+      .optional(),
+    active: z.boolean().default(true),
+    available: z.boolean().default(true),
+    sortOrder: z.number().int().min(0).max(9999).default(0),
   })
   .strict();
 @Controller('admin')
-@UseGuards(AuthGuard, AdminGuard)
+@UseGuards(MemberGuard)
 export class AdminController {
   constructor(private readonly db: PrismaService) {}
-  @Get('categories') categories() {
+  private scope(req: AuthRequest) {
+    return { tenantId: req.tenantId, branchId: req.branchId };
+  }
+  private manage(req: AuthRequest) {
+    requireRole(req, ['OWNER', 'MANAGER']);
+  }
+  @Get('categories') categories(@Req() req: AuthRequest) {
     return this.db.client.menuCategory.findMany({
+      where: this.scope(req),
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
     });
   }
-  @Post('categories') createCategory(@Body() body: unknown) {
-    return this.db.client.menuCategory.create({ data: parse(category, body) });
+  @Post('categories') async createCategory(
+    @Req() req: AuthRequest,
+    @Body() body: unknown,
+  ) {
+    this.manage(req);
+    const menu = await this.db.client.menu.findFirst({
+      where: { ...this.scope(req), active: true },
+    });
+    if (!menu) throw new ConflictException('No active menu');
+    return this.db.client.menuCategory.create({
+      data: { ...parse(category, body), ...this.scope(req), menuId: menu.id },
+    });
   }
-  @Patch('categories/:id') updateCategory(
+  @Patch('categories/:id') async updateCategory(
+    @Req() req: AuthRequest,
     @Param('id') id: string,
     @Body() body: unknown,
   ) {
-    return this.db.client.menuCategory.update({
-      where: { id },
+    this.manage(req);
+    const r = await this.db.client.menuCategory.updateMany({
+      where: { id, ...this.scope(req) },
       data: parse(category.partial(), body),
     });
+    if (!r.count) throw new NotFoundException();
+    return this.db.client.menuCategory.findUnique({ where: { id } });
   }
-  @Delete('categories/:id') archiveCategory(@Param('id') id: string) {
-    return this.db.client.menuCategory.update({
-      where: { id },
-      data: { active: false },
-    });
+  @Post('categories/:id/archive') archiveCategory(
+    @Req() req: AuthRequest,
+    @Param('id') id: string,
+  ) {
+    this.manage(req);
+    return this.updateCategory(req, id, { active: false });
   }
-  @Get('menu') menu() {
-    return this.db.client.menuItem.findMany({
+  @Get('products') products(@Req() req: AuthRequest) {
+    return this.db.client.product.findMany({
+      where: this.scope(req),
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
     });
   }
-  @Post('menu') createMenu(@Body() body: unknown) {
-    return this.db.client.menuItem.create({ data: parse(menuItem, body) });
+  @Post('products') async createProduct(
+    @Req() req: AuthRequest,
+    @Body() body: unknown,
+  ) {
+    this.manage(req);
+    const data = parse(product, body);
+    const c = await this.db.client.menuCategory.findFirst({
+      where: { id: data.categoryId, ...this.scope(req) },
+    });
+    if (!c) throw new NotFoundException('Category not found');
+    return this.db.client.product.create({
+      data: { ...data, ...this.scope(req), menuId: c.menuId },
+    });
   }
-  @Patch('menu/:id') updateMenu(
+  @Patch('products/:id') async updateProduct(
+    @Req() req: AuthRequest,
     @Param('id') id: string,
     @Body() body: unknown,
   ) {
-    return this.db.client.menuItem.update({
-      where: { id },
-      data: parse(menuItem.partial(), body),
-    });
-  }
-  @Delete('menu/:id') archiveMenu(@Param('id') id: string) {
-    return this.db.client.menuItem.update({
-      where: { id },
-      data: { active: false },
-    });
-  }
-  @Get('tables') tables() {
-    return this.db.client.table.findMany({ orderBy: { name: 'asc' } });
-  }
-  @Post('tables') async createTable(@Body() body: unknown) {
-    try {
-      return await this.db.client.table.create({
-        data: parse(z.object({ name }).strict(), body),
+    this.manage(req);
+    const data = parse(product.partial(), body);
+    if (data.categoryId) {
+      const p = await this.db.client.product.findFirst({
+        where: { id, ...this.scope(req) },
       });
-    } catch (e) {
-      if (
-        e instanceof Prisma.PrismaClientKnownRequestError &&
-        e.code === 'P2002'
-      )
-        throw new ConflictException('A table with this name already exists');
-      throw e;
+      if (!p) throw new NotFoundException();
+      const c = await this.db.client.menuCategory.findFirst({
+        where: { id: data.categoryId, ...this.scope(req) },
+      });
+      if (!c) throw new NotFoundException('Category not found');
+      if (p.menuId !== c.menuId)
+        throw new ConflictException('Category belongs to another menu');
     }
+    const r = await this.db.client.product.updateMany({
+      where: { id, ...this.scope(req) },
+      data,
+    });
+    if (!r.count) throw new NotFoundException();
+    return this.db.client.product.findUnique({ where: { id } });
   }
-  @Patch('tables/:id') updateTable(
+  @Patch('products/:id/availability') async availability(
+    @Req() req: AuthRequest,
     @Param('id') id: string,
     @Body() body: unknown,
   ) {
-    return this.db.client.table.update({
-      where: { id },
-      data: parse(
-        z
-          .object({ name: name.optional(), active: z.boolean().optional() })
-          .strict(),
-        body,
-      ),
+    const { available } = parse(
+      z.object({ available: z.boolean() }).strict(),
+      body,
+    );
+    const r = await this.db.client.product.updateMany({
+      where: { id, ...this.scope(req) },
+      data: { available },
     });
+    if (!r.count) throw new NotFoundException();
+    return this.db.client.product.findUnique({ where: { id } });
   }
-  @Post('tables/:id/token') rotate(@Param('id') id: string) {
-    return this.db.client.table.update({
-      where: { id },
-      data: { qrToken: randomUUID() },
-    });
-  }
-  @Get('tables/:id/qr') async qr(
+  @Post('products/:id/archive') archiveProduct(
+    @Req() req: AuthRequest,
     @Param('id') id: string,
-    @Res() res: Response,
   ) {
-    const table = await this.db.client.table.findUnique({ where: { id } });
-    if (!table) throw new NotFoundException();
-    const url = `${process.env.APP_ORIGIN || 'http://localhost:3010'}/t/${table.qrToken}`;
-    const svg = await QRCode.toString(url, {
-      type: 'svg',
-      width: 480,
-      margin: 4,
-      errorCorrectionLevel: 'M',
-    });
-    res.type('image/svg+xml').send(svg);
+    this.manage(req);
+    return this.updateProduct(req, id, { active: false });
   }
 }

@@ -944,3 +944,35 @@ footer {
     margin-top: 0;
   }
 }
+.setup-form {
+  display: grid;
+  gap: 12px;
+}
+.setup-form label {
+  margin: 0;
+}
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 20px 0;
+}
+.print-card.thermal {
+  max-width: 80mm;
+}
+@media print {
+  .print-card.thermal {
+    width: 72mm;
+    padding: 2mm;
+    font-size: 12px;
+  }
+  .print-card.thermal > img {
+    width: 60mm;
+  }
+  .print-card.thermal h1 {
+    font-size: 20px;
+  }
+  .print-card.thermal p {
+    overflow-wrap: anywhere;
+  }
+}

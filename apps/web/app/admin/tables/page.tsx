@@ -1,4 +1,4 @@
-import { Admin } from '../../../components/admin';
+import { redirect } from 'next/navigation';
 export default function Page() {
-  return <Admin kind="tables" />;
+  redirect('/admin/service-points');
 }

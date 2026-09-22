@@ -1,4 +1,4 @@
-import { StaffOrders } from '../../../components/staff-orders';
+import { redirect } from 'next/navigation';
 export default function Page() {
-  return <StaffOrders history />;
+  redirect('/staff/orders');
 }

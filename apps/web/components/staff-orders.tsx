@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { orderingApi } from '@repo/api-client';
+import { orderingApi, type Order } from '@repo/api-client';
 import { clientFetch } from '../lib/fetch/client';
 import { StaffShell } from './staff-shell';
 import { OrderCard } from './order-card';
@@ -20,116 +20,114 @@ export function StaffOrders({
   );
 }
 function Orders({ history, id }: { history: boolean; id?: string }) {
-  const cache = useQueryClient();
-  const [cursor, setCursor] = useState<string | undefined>();
-  const [filter, setFilter] = useState('ALL');
-  const [connected, setConnected] = useState(false);
-  const [sound, setSound] = useState(false);
-  const [fresh, setFresh] = useState<Set<string>>(new Set());
-  const audio = useRef<AudioContext | null>(null);
-  const seen = useRef(new Set<string>());
-  const orders = useQuery({
-    queryKey: ['staff-orders', history, cursor, id],
-    queryFn: async () =>
+  const cache = useQueryClient(),
+    [sound, setSound] = useState(false),
+    [connected, setConnected] = useState(false),
+    [fresh, setFresh] = useState<string | null>(null);
+  const known = useRef<Set<string> | null>(null);
+  const query = useQuery({
+    queryKey: ['staff-orders', history, id],
+    queryFn: () =>
       id
-        ? {
-            orders: [await clientFetch(orderingApi.detail(id))],
+        ? clientFetch(orderingApi.detail(id)).then((o) => ({
+            orders: [o],
             nextCursor: null,
-          }
-        : clientFetch(orderingApi.orders(history, cursor)),
+          }))
+        : clientFetch(orderingApi.orders(history)),
     refetchInterval: 15000,
   });
   const summary = useQuery({
     queryKey: ['summary'],
     queryFn: () => clientFetch(orderingApi.summary()),
-    refetchInterval: 30000,
+    refetchInterval: 60000,
   });
   useEffect(() => {
-    if (history) return;
-    const events = new EventSource('/api/staff/events');
-    events.onopen = () => {
+    if (!query.data) return;
+    const ids = new Set(query.data.orders.map((o) => o.id));
+    if (known.current && sound && !history) {
+      const isNew = query.data.orders.find(
+        (o) => !known.current?.has(o.id) && o.status === 'NEW',
+      );
+      if (isNew) {
+        setFresh(isNew.id);
+        try {
+          const c = new AudioContext();
+          const oscillator = c.createOscillator();
+          const gain = c.createGain();
+          oscillator.connect(gain);
+          gain.connect(c.destination);
+          oscillator.frequency.value = 780;
+          gain.gain.setValueAtTime(0.08, c.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.18);
+          oscillator.start();
+          oscillator.stop(c.currentTime + 0.18);
+          oscillator.onended = () => void c.close();
+        } catch {
+          /* Browser audio is optional. */
+        }
+      }
+    }
+    known.current = ids;
+  }, [query.data, sound, history]);
+  useEffect(() => {
+    if (history || id) return;
+    const stream = new EventSource('/api/staff/events');
+    stream.onopen = () => {
       setConnected(true);
       void cache.invalidateQueries({ queryKey: ['staff-orders'] });
     };
-    events.onerror = () => setConnected(false);
-    events.onmessage = (event) => {
-      const data = JSON.parse(event.data as string) as {
-        kind: string;
-        orderId: string;
-      };
-      if (data.kind === 'new' && !seen.current.has(data.orderId)) {
-        seen.current.add(data.orderId);
-        setFresh((current) => new Set([...current, data.orderId]));
-        if (sound && audio.current?.state === 'running') {
-          const ctx = audio.current;
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.frequency.value = 880;
-          gain.gain.setValueAtTime(0.12, ctx.currentTime);
-          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-          osc.start();
-          osc.stop(ctx.currentTime + 0.4);
+    stream.onerror = () => setConnected(false);
+    stream.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data) as { kind: string };
+        if (data.kind === 'new' || data.kind === 'changed') {
+          void cache.invalidateQueries({ queryKey: ['staff-orders'] });
+          void cache.invalidateQueries({ queryKey: ['summary'] });
         }
-      }
-      if (data.kind !== 'heartbeat') {
-        void cache.invalidateQueries({ queryKey: ['staff-orders'] });
-        void cache.invalidateQueries({ queryKey: ['summary'] });
+      } catch {
+        /* Ignore malformed event and rely on polling. */
       }
     };
-    return () => events.close();
-  }, [cache, history, sound]);
-  const visible =
-    orders.data?.orders.filter(
-      (o) => filter === 'ALL' || o.status === filter,
-    ) || [];
+    return () => {
+      stream.close();
+    };
+  }, [history, id, cache]);
+  const orders = query.data?.orders || [];
   return (
     <>
-      <header className="page-heading">
+      <div className="page-heading">
         <div>
-          <div className="eyebrow">THE BAR / SERVICE</div>
+          <div className="eyebrow">LIVE SERVICE</div>
           <h1>
-            {history
-              ? 'Order history'
-              : id
-                ? 'Order details'
-                : 'Keep the rounds moving.'}
+            {id
+              ? 'Order detail'
+              : history
+                ? 'Order history'
+                : 'Orders to serve'}
           </h1>
-          <p>
-            {history
-              ? 'A permanent record of each independent order.'
-              : 'Every table. Every round. Right here.'}
-          </p>
+          <p>Orders stay in the database and reload after connection loss.</p>
         </div>
-        {!history && (
-          <div className="connection">
-            <span className={connected ? 'online' : ''}>
-              ●{' '}
-              {connected
+        <div className="connection">
+          <span className={connected ? 'online' : ''}>
+            {history
+              ? 'History'
+              : connected
                 ? 'Live connection'
-                : 'Reconnecting · polling every 15s'}
-            </span>
-            <button
-              onClick={() => {
-                if (!audio.current) audio.current = new AudioContext();
-                void audio.current.resume().then(() => setSound((s) => !s));
-              }}
-            >
-              {sound ? '♪ Sound on' : 'Enable sound'}
-            </button>
-          </div>
-        )}
-      </header>
-      <ErrorNotice error={orders.error || summary.error} />
-      {summary.data && (
-        <section className="summary-strip">
+                : 'Refreshing every 15s'}
+          </span>
+          <Action secondary onClick={() => setSound(true)}>
+            {sound ? 'Sound on' : 'Enable sound'}
+          </Action>
+        </div>
+      </div>
+      {!id && summary.data && (
+        <div className="summary-strip">
           <div>
-            <small>Today · {summary.data.date} · Bangkok</small>
+            <small>Today · {summary.data.date}</small>
             <strong>{summary.data.orderCount} orders</strong>
           </div>
           <div>
-            <small>Payments received</small>
+            <small>Paid total</small>
             <strong>{money(summary.data.total)}</strong>
           </div>
           <div>
@@ -137,72 +135,23 @@ function Orders({ history, id }: { history: boolean; id?: string }) {
             <strong>{money(summary.data.cash)}</strong>
           </div>
           <div>
-            <small>QR</small>
-            <strong>{money(summary.data.qr)}</strong>
+            <small>PromptPay</small>
+            <strong>{money(summary.data.promptpay)}</strong>
           </div>
-        </section>
-      )}
-      <div className="board-toolbar">
-        <div className="filters">
-          {[
-            'ALL',
-            'NEW',
-            'ACCEPTED',
-            'PREPARING',
-            'SERVED',
-            ...(history ? ['CANCELLED'] : []),
-          ].map((f) => (
-            <button
-              key={f}
-              className={filter === f ? 'selected' : ''}
-              onClick={() => setFilter(f)}
-            >
-              {f === 'ALL' ? 'All orders' : f.toLowerCase()}
-            </button>
-          ))}
         </div>
-        <span className="muted">{visible.length} shown</span>
-      </div>
-      {orders.isPending ? (
-        <div className="empty">Loading orders…</div>
-      ) : visible.length ? (
+      )}
+      <ErrorNotice error={query.error} />
+      {orders.length ? (
         <div className="orders-grid">
-          {visible.map((order) => (
-            <OrderCard
-              key={order.id}
-              order={order}
-              highlight={fresh.has(order.id)}
-            />
+          {orders.map((o: Order) => (
+            <OrderCard key={o.id} order={o} highlight={fresh === o.id} />
           ))}
         </div>
       ) : (
         <div className="empty">
-          <span>✓</span>
-          <h2>{history ? 'No orders on this page' : 'All caught up.'}</h2>
-          <p>
-            {history
-              ? 'Change the filter or return to the latest orders.'
-              : 'New orders will appear here automatically.'}
-          </p>
+          {query.isPending ? 'Loading…' : 'No orders here yet.'}
         </div>
       )}
-      {history && (
-        <div className="row">
-          <Action secondary onClick={() => setCursor(undefined)}>
-            Latest orders
-          </Action>
-          {orders.data?.nextCursor && (
-            <Action onClick={() => setCursor(orders.data.nextCursor!)}>
-              Older orders →
-            </Action>
-          )}
-        </div>
-      )}
-      <footer>
-        {history
-          ? 'Sales use confirmed payments by receipt date in Bangkok. Cancelled orders are excluded from the order count.'
-          : 'Served orders with pending payment remain visible until payment is received.'}
-      </footer>
     </>
   );
 }

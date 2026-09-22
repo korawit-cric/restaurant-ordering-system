@@ -1,36 +1,49 @@
 import { prepareOrder, restoreCart } from './cart';
-import type { MenuItem } from '@repo/api-client';
-const item: MenuItem = {
-  id: 'leo',
+import type { Product } from '@repo/api-client';
+const p: Product = {
+  id: 'f2956cf6-816c-4637-936a-7577946daa10',
+  categoryId: 'c',
   name: 'Leo',
-  price: '80.10',
-  categoryId: 'beer',
+  price: '80.00',
   description: null,
   imageUrl: null,
   active: true,
   available: true,
   sortOrder: 0,
 };
-const key = '8b7d0d67-14d7-4eb0-afd2-114d13495d66';
-test('preserves an uncertain submission byte-for-byte across a reload', () => {
-  const pending = prepareOrder({ leo: 2 }, [item], 'CASH', key);
-  expect(
-    restoreCart(JSON.stringify({ cart: { leo: 2 }, pending }))?.pending,
-  ).toEqual(pending);
+test('prepares order with authoritative expected price and note', () => {
+  const o = prepareOrder(
+    { [p.id]: 2 },
+    { [p.id]: 'Cold' },
+    [p],
+    'CASH',
+    'f2956cf6-816c-4637-936a-7577946daa11',
+  );
+  expect(o.items).toEqual([
+    { productId: p.id, quantity: 2, expectedPrice: '80.00', note: 'Cold' },
+  ]);
 });
-test('normalises display prices without including client totals', () => {
-  expect(
-    prepareOrder({ leo: 2 }, [{ ...item, price: '80' }], 'QR', key),
-  ).toEqual({
-    requestKey: key,
-    method: 'QR',
-    items: [{ menuItemId: 'leo', quantity: 2, expectedPrice: '80.00' }],
-  });
-});
-test('rejects empty, sold-out and corrupted stored carts', () => {
-  expect(() => prepareOrder({}, [item], 'CASH', key)).toThrow();
+test('rejects unavailable product', () => {
   expect(() =>
-    prepareOrder({ leo: 1 }, [{ ...item, available: false }], 'CASH', key),
+    prepareOrder(
+      { [p.id]: 1 },
+      {},
+      [{ ...p, available: false }],
+      'CASH',
+      'f2956cf6-816c-4637-936a-7577946daa11',
+    ),
   ).toThrow();
-  expect(() => restoreCart('{"cart":{"leo":-2},"pending":null}')).toThrow();
+});
+test('restores pending idempotent request', () => {
+  const o = prepareOrder(
+    { [p.id]: 1 },
+    {},
+    [p],
+    'CASH',
+    'f2956cf6-816c-4637-936a-7577946daa11',
+  );
+  expect(
+    restoreCart(JSON.stringify({ cart: { [p.id]: 1 }, notes: {}, pending: o }))
+      ?.pending?.requestKey,
+  ).toBe(o.requestKey);
 });

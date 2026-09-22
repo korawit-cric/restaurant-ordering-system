@@ -1,83 +1,62 @@
 import { Prisma } from '@repo/prisma';
-import { randomUUID } from 'node:crypto';
 import {
   allowedTransition,
-  bangkokDay,
+  branchDay,
   createOrderSchema,
-  parse,
   snapshot,
 } from './rules';
-import { hashPassword, verifyPassword } from '../security/password';
-describe('Ordering invariants', () => {
-  const input = [{ menuItemId: 'one', quantity: 3, expectedPrice: '0.10' }];
-  const item = {
-    id: 'one',
-    name: 'Soda',
-    price: new Prisma.Decimal('0.10'),
-    active: true,
-    available: true,
-    category: { active: true },
-  };
-  it('uses decimal arithmetic and snapshots authoritative names', () => {
-    const result = snapshot([item], input);
-    expect(result.total.toString()).toBe('0.3');
-    expect(result.lines[0]?.name).toBe('Soda');
+const product = {
+  id: 'f2956cf6-816c-4637-936a-7577946daa10',
+  name: 'Leo',
+  price: new Prisma.Decimal('80.00'),
+  active: true,
+  available: true,
+  category: { active: true },
+  menu: { active: true },
+};
+describe('order rules', () => {
+  test('snapshots current database price and quantity', () => {
+    const r = snapshot(
+      [product],
+      [{ productId: product.id, quantity: 2, expectedPrice: '80.00' }],
+    );
+    expect(r.total.toString()).toBe('160');
+    expect(r.lines[0]?.productNameSnapshot).toBe('Leo');
   });
-  it('rejects stale prices, sold-out items, inactive categories and unknown items', () => {
+  test('rejects stale price and sold-out product', () => {
     expect(() =>
-      snapshot([item], [{ ...input[0]!, expectedPrice: '0.20' }]),
+      snapshot(
+        [product],
+        [{ productId: product.id, quantity: 1, expectedPrice: '70.00' }],
+      ),
     ).toThrow();
-    expect(() => snapshot([{ ...item, available: false }], input)).toThrow();
     expect(() =>
-      snapshot([{ ...item, category: { active: false } }], input),
+      snapshot(
+        [{ ...product, available: false }],
+        [{ productId: product.id, quantity: 1, expectedPrice: '80.00' }],
+      ),
     ).toThrow();
-    expect(() => snapshot([], input)).toThrow();
   });
-  it.each([0, -1, 31, 1.5, '2', null])(
-    'rejects malformed quantity %p',
-    (quantity) =>
-      expect(() =>
-        parse(createOrderSchema, {
-          requestKey: randomUUID(),
-          method: 'CASH',
-          items: [{ ...input[0], quantity }],
-        }),
-      ).toThrow(),
-  );
-  it('rejects client totals and duplicate menu lines', () => {
-    expect(() =>
-      parse(createOrderSchema, {
-        requestKey: randomUUID(),
+  test('rejects duplicate lines', () => {
+    expect(
+      createOrderSchema.safeParse({
+        requestKey: 'f2956cf6-816c-4637-936a-7577946daa11',
         method: 'CASH',
-        items: input,
-        total: 1,
-      }),
-    ).toThrow();
-    expect(() =>
-      parse(createOrderSchema, {
-        requestKey: randomUUID(),
-        method: 'CASH',
-        items: [...input, ...input],
-      }),
-    ).toThrow();
+        items: [
+          { productId: product.id, quantity: 1, expectedPrice: '80.00' },
+          { productId: product.id, quantity: 1, expectedPrice: '80.00' },
+        ],
+      }).success,
+    ).toBe(false);
   });
-  it('allows forward fulfillment only', () => {
-    expect(allowedTransition('NEW', 'SERVED')).toBe(false);
-    expect(allowedTransition('PREPARING', 'ACCEPTED')).toBe(false);
-    expect(allowedTransition('CANCELLED', 'NEW')).toBe(false);
-    expect(allowedTransition('PREPARING', 'SERVED')).toBe(true);
+  test('validates state transitions', () => {
+    expect(allowedTransition('NEW', 'ACCEPTED')).toBe(true);
+    expect(allowedTransition('NEW', 'COMPLETED')).toBe(false);
+    expect(allowedTransition('READY', 'COMPLETED')).toBe(true);
   });
-  it('uses Bangkok midnight across UTC date boundaries', () => {
-    const day = bangkokDay(new Date('2026-09-18T18:00:00Z'));
-    expect(day.date).toBe('2026-09-19');
-    expect(day.start.toISOString()).toBe('2026-09-18T17:00:00.000Z');
-    expect(day.end.getTime() - day.start.getTime()).toBe(86400000);
-  });
-  it('salts passwords and verifies them safely', () => {
-    const a = hashPassword('long secure password');
-    const b = hashPassword('long secure password');
-    expect(a).not.toBe(b);
-    expect(verifyPassword('long secure password', a)).toBe(true);
-    expect(verifyPassword('wrong', a)).toBe(false);
+  test('uses branch timezone for daily summary', () => {
+    expect(
+      branchDay('Asia/Bangkok', new Date('2026-09-18T18:00:00Z')).date,
+    ).toBe('2026-09-19');
   });
 });

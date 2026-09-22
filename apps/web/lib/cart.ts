@@ -1,45 +1,47 @@
 import { z } from 'zod';
-import type { CreateOrder, MenuItem, PaymentMethod } from '@repo/api-client';
+import type { CreateOrder, Product, PaymentMethod } from '@repo/api-client';
 const line = z
   .object({
-    menuItemId: z.string().min(1),
+    productId: z.string().uuid(),
     quantity: z.number().int().min(1).max(30),
-    expectedPrice: z.string().regex(/^\d{1,8}\.\d{2}$/),
+    expectedPrice: z.string(),
+    note: z.string().max(240).nullable().optional(),
   })
   .strict();
-const savedCart = z.object({
+const saved = z.object({
   cart: z.record(z.number().int().min(0).max(30)),
+  notes: z.record(z.string().max(240)),
   pending: z
     .object({
       requestKey: z.string().uuid(),
-      method: z.enum(['CASH', 'QR']),
+      method: z.enum(['CASH', 'PROMPTPAY']).nullable(),
       items: z.array(line).min(1).max(40),
     })
     .strict()
     .nullable(),
 });
 export function restoreCart(raw: string | null) {
-  return raw ? savedCart.parse(JSON.parse(raw)) : null;
+  return raw ? saved.parse(JSON.parse(raw)) : null;
 }
 export function prepareOrder(
   cart: Record<string, number>,
-  menu: MenuItem[],
-  method: PaymentMethod,
+  notes: Record<string, string>,
+  menu: Product[],
+  method: PaymentMethod | null,
   requestKey: string,
 ): CreateOrder {
   const items = Object.entries(cart)
-    .filter(([, qty]) => qty > 0)
+    .filter(([, q]) => q > 0)
     .map(([id, quantity]) => {
-      const item = menu.find((m) => m.id === id);
-      if (!item?.active || !item.available)
-        throw new Error(
-          'An item is no longer available. Remove it before ordering.',
-        );
+      const p = menu.find((x) => x.id === id);
+      if (!p?.active || !p.available)
+        throw new Error('An item is no longer available. Refresh the menu.');
       return {
-        menuItemId: id,
+        productId: id,
         quantity,
-        expectedPrice: Number(item.price).toFixed(2),
+        expectedPrice: Number(p.price).toFixed(2),
+        note: notes[id] || null,
       };
     });
-  return savedCart.shape.pending.unwrap().parse({ requestKey, method, items });
+  return saved.shape.pending.unwrap().parse({ requestKey, method, items });
 }
