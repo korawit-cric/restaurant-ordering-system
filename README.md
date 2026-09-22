@@ -4,6 +4,61 @@
 
 Orderly lets a business register, choose a service workflow, add a menu and locations, print QR codes, and run a live order board on existing devices. It is intentionally lighter than a POS. Customers need only a browser and a valid QR. Cash and PromptPay are tracked separately from preparation status; PromptPay receipts are confirmed by staff, never assumed paid.
 
+## How it works
+
+1. **Set up the restaurant.** An owner signs up at `/signup`, creates a branch, and chooses a preset. The setup guide then leads them through categories, products, service points (tables, bar seats, counters, or pickup spots), and QR printing.
+2. **Scan and order.** A permanent service-point QR opens `/q/<token>`; a temporary session QR opens `/s/<token>`. The customer sees that branch's available menu, adjusts quantities, adds notes, reviews the total, and submits without an account. A valid QR identifies the destination; customers never enter a table number.
+3. **Pay according to the branch workflow.** A branch can take payment per order, collect one payment when an open session closes, or handle payment outside Orderly. Cash and PromptPay remain pending until staff confirms receipt. PromptPay shows an amount-specific QR when a recipient ID is configured; the app does not verify bank transfers automatically.
+4. **Serve and repeat.** The order appears on `/staff/orders` with its location, items, payment state, and preparation state. Staff can accept it, prepare it, mark it ready or complete, and confirm payment separately. An open session can receive more orders through the same QR; a closed temporary session cannot.
+
+```mermaid
+flowchart LR
+    A[Owner sets up branch, menu, and QR] --> B[Customer scans QR and submits order]
+    B --> C[(PostgreSQL order and item snapshots)]
+    C --> D[Staff dashboard receives update]
+    D --> E[Staff confirms payment and fulfills order]
+    E --> F{Open session?}
+    F -- Yes --> B
+    F -- No --> G[Finished]
+```
+
+### Screenshots
+
+These browser-test screenshots use sample restaurant data. The QR pictured below points to `localhost`, so generate and print fresh QR codes from the deployed HTTPS domain for real customers.
+
+<img src="artifacts/customer-menu.png" alt="Mobile customer menu showing table A7, a Leo quantity selector, and a sticky View order button" width="320" />
+
+_The mobile menu keeps the location, quantities, and cart total visible._
+
+<img src="artifacts/staff-dashboard.png" alt="Staff live orders dashboard showing an A7 order, cash pending state, and fulfillment controls" width="900" />
+
+_The live board gives the location and next staff actions visual priority._
+
+<img src="artifacts/location-qr.png" alt="Printable service-point QR dialog for A7 with print and PNG download controls" width="720" />
+
+_A service-point QR can be printed in A4 or compact format, or downloaded as a PNG._
+
+## Design behind it
+
+**Service points describe fulfillment, not just tables.** A branch can use a table, bar seat, standing zone, counter, or pickup point. A permanent QR belongs to a service point. A temporary QR belongs to an `OrderSession`, which can be moved to another service point without changing the customer's link. Each `Order` remains a separate record; an open session groups repeat orders only when the selected workflow needs it.
+
+**Presets keep setup short.** Four presets combine QR, session, payment, and fulfillment modes. Owners can adjust those settings later, while the customer flow stays scan → menu → cart → order. The [workflow matrix](#workflows) shows each preset.
+
+**Tenant boundaries are enforced in the API and database.** Restaurants share one PostgreSQL database, but business records carry tenant and branch scope. Authenticated staff requests derive that scope from membership, and composite relationships prevent orders, products, sessions, or service points from crossing branches. Public QR tokens grant only customer ordering access.
+
+**PostgreSQL is the source of truth.** The NestJS API validates the QR, availability, quantities, and current prices before calculating totals with decimal money values. It stores product names and prices on order items so old orders survive menu changes. Transactions and idempotency keys protect order submission from partial writes and double taps. The staff board uses branch-scoped SSE for prompt updates, then reloads persisted state after refresh or connection loss.
+
+```mermaid
+flowchart LR
+    Customer[Customer browser] --> Web[Next.js web app]
+    Staff[Staff / owner browser] --> Web
+    Web --> API[NestJS API]
+    API --> DB[(PostgreSQL via Prisma)]
+    API -- Branch-scoped SSE --> Staff
+```
+
+The monorepo keeps the Next.js interface, NestJS business rules, shared typed API contracts, and Prisma schema in separate packages. It deploys as one web app, one API replica, and PostgreSQL; browser printing and existing devices are enough for v1. The sections below cover [local setup](#local-setup), [correctness](#correctness-and-isolation), and [production deployment](#production-deployment).
+
 ## Local setup
 
 Requires Node.js 22.12+, npm, and PostgreSQL. Docker Compose can provide the local database.
