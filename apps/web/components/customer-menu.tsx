@@ -10,63 +10,70 @@ import {
 import { restoreCart, prepareOrder } from '../lib/cart';
 import { ApiError, clientFetch } from '../lib/fetch/client';
 import { Action, ErrorNotice, money } from './shared';
-export function CustomerMenu({ token }: { token: string }) {
+export function CustomerMenu({
+  kind,
+  token,
+}: {
+  kind: 'q' | 's';
+  token: string;
+}) {
   const router = useRouter();
   const query = useQuery({
-    queryKey: ['menu', token],
-    queryFn: () => clientFetch(orderingApi.menu(token)),
-    refetchInterval: 10000,
-    staleTime: 0,
-    refetchOnMount: 'always',
+    queryKey: ['menu', kind, token],
+    queryFn: () => clientFetch(orderingApi.menu(kind, token)),
+    refetchInterval: 3000,
     refetchOnWindowFocus: true,
+    refetchOnMount: 'always',
     retry: 1,
   });
   const [cart, setCart] = useState<Record<string, number>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
   const [checkout, setCheckout] = useState(false);
   const [method, setMethod] = useState<PaymentMethod>('CASH');
   const [pending, setPending] = useState<CreateOrder | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [loaded, setLoaded] = useState(false);
-  const storageKey = `ordering:${token}`;
+  const key = `order:${kind}:${token}`;
   useEffect(() => {
     try {
-      const saved = restoreCart(localStorage.getItem(storageKey));
-      if (saved) {
-        setCart(saved.cart || {});
-        setPending(saved.pending || null);
-        if (saved.pending) {
-          setCheckout(true);
-          setMethod(saved.pending.method);
-        }
+      const s = restoreCart(localStorage.getItem(key));
+      if (s) {
+        setCart(s.cart);
+        setNotes(s.notes);
+        setPending(s.pending);
+        if (s.pending) setCheckout(true);
       }
     } catch {
-      setError('Your saved cart could not be restored.');
+      setError('Saved cart could not be restored.');
     }
     setLoaded(true);
-  }, [storageKey]);
+  }, [key]);
   useEffect(() => {
     if (loaded) {
       try {
-        localStorage.setItem(storageKey, JSON.stringify({ cart, pending }));
+        localStorage.setItem(key, JSON.stringify({ cart, notes, pending }));
       } catch {
-        setError(
-          'Browser storage is unavailable. Keep this page open until your order is confirmed.',
-        );
+        setError('Keep this page open until the order is confirmed.');
       }
     }
-  }, [cart, pending, loaded, storageKey]);
-  const items = query.data?.categories.flatMap((c) => c.items) || [];
+  }, [cart, notes, pending, loaded, key]);
+  const products = query.data?.categories.flatMap((c) => c.products) || [];
   const selected = Object.entries(cart)
-    .filter(([, qty]) => qty > 0)
-    .map(([id, qty]) => ({ item: items.find((i) => i.id === id), id, qty }));
+    .filter(([, q]) => q > 0)
+    .map(([id, quantity]) => ({
+      product: products.find((p) => p.id === id),
+      id,
+      quantity,
+    }));
+  const count = selected.reduce((v, x) => v + x.quantity, 0);
   const total =
     selected.reduce(
-      (sum, l) => sum + Math.round(Number(l.item?.price || 0) * 100) * l.qty,
+      (v, x) =>
+        v + Math.round(Number(x.product?.price || 0) * 100) * x.quantity,
       0,
     ) / 100;
-  const count = selected.reduce((sum, l) => sum + l.qty, 0);
-  const invalid = selected.some((l) => !l.item || !l.item.available);
+  const invalid = selected.some((x) => !x.product || !x.product.available);
   function change(id: string, delta: number) {
     if (pending || busy) return;
     setCart((c) => ({
@@ -80,18 +87,25 @@ export function CustomerMenu({ token }: { token: string }) {
     setError(null);
     try {
       const request =
-        pending || prepareOrder(cart, items, method, crypto.randomUUID());
-      // Persist the exact request before sending. Retries survive reload and reuse its key.
+        pending ||
+        prepareOrder(
+          cart,
+          notes,
+          products,
+          query.data?.settings.paymentMode === 'PER_ORDER' ? method : null,
+          crypto.randomUUID(),
+        );
       localStorage.setItem(
-        storageKey,
-        JSON.stringify({ cart, pending: request }),
+        key,
+        JSON.stringify({ cart, notes, pending: request }),
       );
       setPending(request);
-      const order = await clientFetch(orderingApi.create(token, request));
-      localStorage.removeItem(storageKey);
-      setCart({});
+      const order = await clientFetch(orderingApi.create(kind, token, request));
+      localStorage.removeItem(key);
       setPending(null);
-      router.push(`/t/${token}/order/${order.id}`);
+      setCart({});
+      setNotes({});
+      router.push(`/${kind}/${token}/order/${order.id}`);
     } catch (e) {
       setError(e);
       if (e instanceof ApiError && [400, 404, 409].includes(e.status)) {
@@ -105,37 +119,41 @@ export function CustomerMenu({ token }: { token: string }) {
   if (!query.data)
     return (
       <main className="customer">
-        <div className="wordmark">ORDERING / POC</div>
+        <div className="wordmark">ORDERLY</div>
         <ErrorNotice error={query.error} />
         <p>
           {query.isPending
-            ? 'Opening your table…'
-            : 'Unable to open this table.'}
+            ? 'Opening menu…'
+            : 'This QR is not accepting orders.'}
         </p>
         <Action onClick={() => void query.refetch()}>Try again</Action>
       </main>
     );
-  const { table, categories, payment } = query.data;
+  const { branch, servicePoint, session, categories, settings } = query.data;
+  const location =
+    session?.label ||
+    servicePoint?.name ||
+    (settings.fulfillmentMode === 'PICKUP' ? 'Pickup' : 'Your location');
   return (
     <main className="customer">
       <header className="customer-header">
-        <a href={`/t/${token}`} className="wordmark">
-          ORDERING / POC
+        <a href={`/${kind}/${token}`} className="wordmark">
+          ORDERLY
         </a>
-        <span className="table-pill">TABLE {table.name}</span>
+        <span className="table-pill">{location}</span>
       </header>
-      <div className="eyebrow">MAKE YOURSELF AT HOME</div>
-      <h1>{checkout ? 'Your next round.' : 'What sounds good?'}</h1>
+      <div className="eyebrow">{branch.name.toUpperCase()}</div>
+      <h1>{checkout ? 'Review your order' : 'What sounds good?'}</h1>
       <p className="muted">
-        {checkout
-          ? 'One order. One payment. Then enjoy.'
-          : 'Drinks, a little food, and good company.'}
+        {session?.description ||
+          servicePoint?.description ||
+          'Order from your phone. Staff will take it from here.'}
       </p>
       <ErrorNotice error={error || query.error} />
       {pending && (
         <div className="notice">
-          An order is waiting for confirmation. Retry below to safely recover
-          it. Your items are locked so a retry cannot place a different order.
+          Your previous submission may have reached the restaurant. Retry it
+          safely using the same request.
         </div>
       )}
       {!checkout ? (
@@ -151,43 +169,40 @@ export function CustomerMenu({ token }: { token: string }) {
             <section id={c.id} key={c.id}>
               <div className="section-title">
                 <h2>{c.name}</h2>
-                <span>{String(c.items.length).padStart(2, '0')}</span>
               </div>
-              {c.items.map((item) => (
+              {c.products.map((p) => (
                 <article
-                  key={item.id}
-                  className={`menu-row ${!item.available ? 'sold-out' : ''}`}
+                  key={p.id}
+                  className={`menu-row ${!p.available ? 'sold-out' : ''}`}
                 >
-                  {item.imageUrl && (
-                    <img src={item.imageUrl} alt="" className="product-image" />
+                  {p.imageUrl && (
+                    <img src={p.imageUrl} className="product-image" alt="" />
                   )}
                   <div className="item-copy">
-                    <h3>{item.name}</h3>
-                    {item.description && <p>{item.description}</p>}
-                    <strong>{money(item.price)}</strong>
+                    <h3>{p.name}</h3>
+                    {p.description && <p>{p.description}</p>}
+                    <strong>{money(p.price)}</strong>
                   </div>
-                  {!item.available ? (
-                    <span className="badge">Sold out</span>
-                  ) : (
+                  {p.available ? (
                     <div className="quantity">
                       <button
-                        aria-label={`Remove one ${item.name}`}
-                        disabled={!!pending || busy || !cart[item.id]}
-                        onClick={() => change(item.id, -1)}
+                        aria-label={`Remove one ${p.name}`}
+                        disabled={!!pending || busy || !cart[p.id]}
+                        onClick={() => change(p.id, -1)}
                       >
                         −
                       </button>
-                      <span>{cart[item.id] || 0}</span>
+                      <span>{cart[p.id] || 0}</span>
                       <button
-                        aria-label={`Add one ${item.name}`}
-                        disabled={
-                          !!pending || busy || (cart[item.id] || 0) >= 30
-                        }
-                        onClick={() => change(item.id, 1)}
+                        aria-label={`Add one ${p.name}`}
+                        disabled={!!pending || busy || (cart[p.id] || 0) >= 30}
+                        onClick={() => change(p.id, 1)}
                       >
                         +
                       </button>
                     </div>
+                  ) : (
+                    <span className="badge">Sold out</span>
                   )}
                 </article>
               ))}
@@ -209,24 +224,33 @@ export function CustomerMenu({ token }: { token: string }) {
             ← Back to menu
           </button>
           <section className="panel">
-            {selected.map((l) => (
-              <div key={l.id} className="checkout-row">
-                <div>
+            {selected.map((x) => (
+              <div key={x.id}>
+                <div className="checkout-row">
                   <strong>
-                    {l.qty} × {l.item?.name || 'Unavailable item'}
+                    {x.quantity} × {x.product?.name || 'Unavailable'}
                   </strong>
-                  {(!l.item || !l.item.available) && (
-                    <p className="danger">Remove this unavailable item</p>
-                  )}
+                  <span>
+                    {money(Number(x.product?.price || 0) * x.quantity)}
+                  </span>
+                  <button
+                    disabled={!!pending || busy}
+                    aria-label="Remove item"
+                    onClick={() => setCart((c) => ({ ...c, [x.id]: 0 }))}
+                  >
+                    ×
+                  </button>
                 </div>
-                <span>{money(Number(l.item?.price || 0) * l.qty)}</span>
-                <button
+                <input
+                  aria-label={`Note for ${x.product?.name}`}
+                  placeholder="Note for staff (optional)"
+                  maxLength={240}
+                  value={notes[x.id] || ''}
                   disabled={!!pending || busy}
-                  aria-label={`Remove ${l.item?.name || 'item'}`}
-                  onClick={() => setCart((c) => ({ ...c, [l.id]: 0 }))}
-                >
-                  ×
-                </button>
+                  onChange={(e) =>
+                    setNotes((n) => ({ ...n, [x.id]: e.target.value }))
+                  }
+                />
               </div>
             ))}
             <div className="total">
@@ -234,46 +258,55 @@ export function CustomerMenu({ token }: { token: string }) {
               <strong>{money(total)}</strong>
             </div>
           </section>
-          <h2>How would you like to pay?</h2>
-          <div className="payment-options">
-            {(['CASH', 'QR'] as const).map((m) => (
-              <label key={m} className={method === m ? 'selected' : ''}>
-                <input
-                  type="radio"
-                  name="payment"
-                  checked={method === m}
-                  disabled={!!pending || busy || (m === 'QR' && !payment.qrUrl)}
-                  onChange={() => setMethod(m)}
-                />
-                <strong>{m === 'CASH' ? 'Cash' : 'PromptPay QR'}</strong>
-                <small>
-                  {m === 'CASH'
-                    ? 'Pay at your table'
-                    : payment.qrUrl
-                      ? 'Staff confirms your transfer'
-                      : 'Not configured yet'}
-                </small>
-              </label>
-            ))}
-          </div>
-          <p className="muted">
-            {method === 'QR'
-              ? 'After placing your order, scan the payment QR and transfer the exact total. Staff will check receipt manually.'
-              : 'Your order is sent straight to the bar. Staff will collect payment.'}
-          </p>
+          {settings.paymentMode === 'PER_ORDER' ? (
+            <>
+              <h2>Payment</h2>
+              <div className="payment-options">
+                {(['CASH', 'PROMPTPAY'] as const).map((m) => (
+                  <label key={m} className={method === m ? 'selected' : ''}>
+                    <input
+                      type="radio"
+                      name="payment"
+                      checked={method === m}
+                      disabled={
+                        !!pending ||
+                        busy ||
+                        (m === 'PROMPTPAY' && !settings.promptpayId)
+                      }
+                      onChange={() => setMethod(m)}
+                    />
+                    <strong>{m === 'CASH' ? 'Cash' : 'PromptPay'}</strong>
+                    <small>
+                      {m === 'PROMPTPAY'
+                        ? 'Transfer and let staff confirm'
+                        : 'Pay staff directly'}
+                    </small>
+                  </label>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="notice">
+              {settings.paymentMode === 'AT_CHECKOUT'
+                ? 'Pay when your session closes.'
+                : 'Staff will handle payment separately.'}
+            </div>
+          )}
           <Action
             disabled={busy || (!pending && (!count || invalid))}
             onClick={() => void submit()}
           >
             {busy
-              ? 'Confirming…'
+              ? 'Submitting…'
               : pending
                 ? 'Retry this order safely'
                 : `Place order · ${money(total)}`}
           </Action>
         </>
       )}
-      <footer>TABLE {table.name} · EVERY ROUND IS A FRESH ORDER</footer>
+      <footer>
+        {branch.name} · {location}
+      </footer>
     </main>
   );
 }

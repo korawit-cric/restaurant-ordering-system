@@ -1,4 +1,4 @@
-import { Admin } from '../../../components/admin';
+import { Categories } from '../../../components/management';
 export default function Page() {
-  return <Admin kind="categories" />;
+  return <Categories />;
 }

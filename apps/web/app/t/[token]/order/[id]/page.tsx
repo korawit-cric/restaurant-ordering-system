@@ -1,8 +1,9 @@
-import { CustomerOrder } from '../../../../../components/customer-order';
+import { redirect } from 'next/navigation';
 export default async function Page({
   params,
 }: {
   params: Promise<{ token: string; id: string }>;
 }) {
-  return <CustomerOrder {...await params} />;
+  const { token, id } = await params;
+  redirect(`/q/${token}/order/${id}`);
 }

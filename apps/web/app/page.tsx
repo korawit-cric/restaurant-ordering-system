@@ -3,29 +3,34 @@ export default function Home() {
   return (
     <main className="landing">
       <div className="wordmark">
-        <span className="brand-icon">↗</span> ORDERING / POC
+        <span className="brand-icon">↗</span> ORDERLY
       </div>
-      <div className="eyebrow">A GOOD NIGHT STARTS HERE</div>
+      <div className="eyebrow">LIGHTWEIGHT RESTAURANT ORDERING</div>
       <h1>
-        Less waiting.
+        Scan. Order.
         <br />
-        <em>Another round.</em>
+        <em>Keep service moving.</em>
       </h1>
       <p>
-        Scan the QR at your table, pick your favourites, and order. Every round
-        has its own payment.
+        Self-setup QR ordering for restaurants, bars, cafés, and food stalls.
+        Run it on the phones, tablets, and browsers you already own.
       </p>
       <div className="panel">
-        <h2>Already at a table?</h2>
+        <h2>Your restaurant, ready in minutes.</h2>
         <p>
-          Use your phone camera to scan the QR on your table. Your menu will
-          open automatically.
+          Create a restaurant, choose your service style, add your menu, print
+          QR codes, and open the live staff board.
         </p>
       </div>
-      <Link className="button primary" href="/staff/login">
-        Staff sign in <span>↗</span>
-      </Link>
-      <footer>MADE FOR SMALL BARS · THAILAND</footer>
+      <div className="row">
+        <Link className="button primary" href="/signup">
+          Create restaurant →
+        </Link>
+        <Link className="button secondary" href="/staff/login">
+          Sign in
+        </Link>
+      </div>
+      <footer>ONE SHARED PLATFORM · MADE FOR SMALL TEAMS</footer>
     </main>
   );
 }

@@ -4,14 +4,15 @@ import { z } from 'zod';
 export const createOrderSchema = z
   .object({
     requestKey: z.string().uuid(),
-    method: z.enum(['CASH', 'QR']),
+    method: z.enum(['CASH', 'PROMPTPAY']).nullable().optional(),
     items: z
       .array(
         z
           .object({
-            menuItemId: z.string().min(1).max(100),
+            productId: z.string().uuid(),
             quantity: z.number().int().min(1).max(30),
-            expectedPrice: z.string().regex(/^\d{1,8}\.\d{2}$/),
+            expectedPrice: z.string().regex(/^\d{1,8}(\.\d{1,2})?$/),
+            note: z.string().trim().max(240).nullable().optional(),
           })
           .strict(),
       )
@@ -20,73 +21,82 @@ export const createOrderSchema = z
   })
   .strict()
   .refine(
-    (b) => new Set(b.items.map((i) => i.menuItemId)).size === b.items.length,
-    'Duplicate menu items',
+    (b) => new Set(b.items.map((i) => i.productId)).size === b.items.length,
+    'Duplicate products',
   );
 export function parse<T>(schema: z.ZodType<T>, body: unknown): T {
-  const result = schema.safeParse(body);
-  if (!result.success)
+  const r = schema.safeParse(body);
+  if (!r.success)
     throw new BadRequestException(
-      result.error.issues
-        .map((i) => `${i.path.join('.')}: ${i.message}`)
-        .join('; '),
+      r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
     );
-  return result.data;
+  return r.data;
 }
 export function snapshot(
-  items: {
+  products: {
     id: string;
     name: string;
     price: Prisma.Decimal;
     active: boolean;
     available: boolean;
     category: { active: boolean };
+    menu: { active: boolean };
   }[],
   input: z.infer<typeof createOrderSchema>['items'],
 ) {
   const lines = input.map((line) => {
-    const item = items.find((x) => x.id === line.menuItemId);
-    if (!item || !item.active || !item.available || !item.category.active)
+    const p = products.find((x) => x.id === line.productId);
+    if (!p || !p.active || !p.available || !p.category.active || !p.menu.active)
       throw new ConflictException(
-        'An item is no longer available. Review your menu.',
+        'An item is no longer available. Refresh the menu.',
       );
-    if (!item.price.equals(line.expectedPrice))
+    if (!p.price.equals(line.expectedPrice))
       throw new ConflictException(
-        `${item.name} has a new price. Review your menu and submit again.`,
+        `${p.name} has a new price. Refresh the menu.`,
       );
     return {
-      menuItemId: item.id,
-      name: item.name,
-      unitPrice: item.price,
+      productId: p.id,
+      productNameSnapshot: p.name,
+      unitPriceSnapshot: p.price,
       quantity: line.quantity,
-      lineTotal: item.price.mul(line.quantity),
+      note: line.note || null,
+      lineTotal: p.price.mul(line.quantity),
     };
   });
-  return {
-    lines,
-    total: lines.reduce(
-      (sum, line) => sum.add(line.lineTotal),
-      new Prisma.Decimal(0),
-    ),
-  };
+  const total = lines.reduce(
+    (sum, line) => sum.add(line.lineTotal),
+    new Prisma.Decimal(0),
+  );
+  return { lines, total };
 }
 export function allowedTransition(from: OrderStatus, to: OrderStatus) {
   const allowed: Record<OrderStatus, OrderStatus[]> = {
     NEW: ['ACCEPTED', 'CANCELLED'],
     ACCEPTED: ['PREPARING', 'CANCELLED'],
-    PREPARING: ['SERVED', 'CANCELLED'],
-    SERVED: [],
+    PREPARING: ['READY', 'CANCELLED'],
+    READY: ['COMPLETED', 'CANCELLED'],
+    COMPLETED: [],
     CANCELLED: [],
   };
   return from === to || allowed[from].includes(to);
 }
-export function bangkokDay(date = new Date()) {
-  const dateString = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Bangkok',
+export function branchDay(timezone: string, date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(date);
-  const start = new Date(`${dateString}T00:00:00+07:00`);
+  }).formatToParts(date);
+  const part = (key: string) => parts.find((x) => x.type === key)?.value || '';
+  const dateString = `${part('year')}-${part('month')}-${part('day')}`;
+  const offset =
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      timeZoneName: 'longOffset',
+    })
+      .formatToParts(new Date(`${dateString}T12:00:00Z`))
+      .find((x) => x.type === 'timeZoneName')
+      ?.value.replace('GMT', '') || '+00:00';
+  const start = new Date(`${dateString}T00:00:00${offset}`);
   return { date: dateString, start, end: new Date(start.getTime() + 86400000) };
 }

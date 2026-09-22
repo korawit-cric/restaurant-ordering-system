@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { orderingApi } from '@repo/api-client';
 import { ApiError, clientFetch } from '../lib/fetch/client';
@@ -13,8 +13,9 @@ export function StaffShell({
   children: React.ReactNode;
   admin?: boolean;
 }) {
-  const router = useRouter();
-  const path = usePathname();
+  const router = useRouter(),
+    path = usePathname(),
+    cache = useQueryClient();
   const me = useQuery({
     queryKey: ['me'],
     queryFn: () => clientFetch(orderingApi.me()),
@@ -28,26 +29,32 @@ export function StaffShell({
   if (!me.data)
     return (
       <main className="workspace">
-        <p>Checking staff access…</p>
+        <p>Checking access…</p>
         <ErrorNotice error={me.error} />
         <Link href="/staff/login">Sign in</Link>
       </main>
     );
-  if (admin && me.data.role !== 'ADMIN')
+  if (admin && !['OWNER', 'MANAGER'].includes(me.data.role || ''))
     return (
       <main className="workspace">
-        <h1>Admin access required</h1>
+        <h1>Manager access required</h1>
         <Link href="/staff/orders">Back to orders</Link>
       </main>
     );
   const links = [
     ['/staff/orders', 'Live orders'],
+    ['/staff/sessions', 'Sessions'],
     ['/staff/history', 'History'],
-    ...(me.data.role === 'ADMIN'
+    ['/staff/reports', 'Reports'],
+    ...(me.data.role !== 'STAFF'
       ? [
           ['/admin/menu', 'Menu'],
           ['/admin/categories', 'Categories'],
-          ['/admin/tables', 'Tables'],
+          ['/admin/service-points', 'QR locations'],
+          ['/admin/settings', 'Settings'],
+          ['/admin/onboarding', 'Setup'],
+          ['/admin/branches', 'Branches'],
+          ['/admin/staff', 'Staff'],
         ]
       : []),
   ];
@@ -55,9 +62,12 @@ export function StaffShell({
     <div className="staff-app">
       <aside>
         <Link href="/staff/orders" className="wordmark">
-          <span className="brand-icon">↗</span> ORDERING / POC
+          <span className="brand-icon">↗</span> ORDERLY
         </Link>
-        <div className="eyebrow">SERVICE STATION</div>
+        <div className="eyebrow">
+          {me.data.memberships.find((m) => m.branchId === me.data?.branchId)
+            ?.branchName || 'SERVICE'}
+        </div>
         <nav>
           {links.map(([href, label]) => (
             <Link
@@ -68,16 +78,36 @@ export function StaffShell({
               {label}
             </Link>
           ))}
+          {me.data.platformRole === 'OPERATOR' && (
+            <Link href="/platform">Platform</Link>
+          )}
         </nav>
         <div className="staff-user">
+          <select
+            aria-label="Active branch"
+            value={me.data.branchId || ''}
+            onChange={(e) => {
+              const branchId = e.target.value;
+              void clientFetch(orderingApi.context(branchId)).then(() => {
+                cache.clear();
+                window.location.href = '/staff/orders';
+              });
+            }}
+          >
+            {me.data.memberships.map((m) => (
+              <option key={m.branchId} value={m.branchId}>
+                {m.tenantName} · {m.branchName}
+              </option>
+            ))}
+          </select>
           <span>{me.data.email}</span>
           <small>{me.data.role}</small>
           <button
-            onClick={() => {
+            onClick={() =>
               void clientFetch(orderingApi.logout()).then(() => {
                 window.location.href = '/staff/login';
-              });
-            }}
+              })
+            }
           >
             Sign out
           </button>
