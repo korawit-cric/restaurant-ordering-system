@@ -38,6 +38,24 @@ export const orderingApi = {
   signup: (body: unknown) => endpoint<User>('/auth/signup', 'POST', body),
   login: (email: string, password: string) =>
     endpoint<User>('/auth/login', 'POST', { email, password }),
+  requestPasswordReset: (email: string) =>
+    endpoint<{ message: string }>('/auth/password/request', 'POST', { email }),
+  resetPassword: (token: string, password: string) =>
+    endpoint<{ ok: true }>('/auth/password/reset', 'POST', { token, password }),
+  invitation: (token: string) =>
+    endpoint<{
+      email: string;
+      role: 'MANAGER' | 'STAFF';
+      restaurant: string;
+      branch: string;
+      needsPassword: boolean;
+    }>(`/auth/invitations/${encodeURIComponent(token)}`),
+  acceptInvitation: (token: string, password?: string) =>
+    endpoint<{ ok: true }>(
+      `/auth/invitations/${encodeURIComponent(token)}/accept`,
+      'POST',
+      password ? { password } : {},
+    ),
   me: () => endpoint<User>('/auth/me'),
   logout: () => endpoint('/auth/logout', 'POST', {}),
   context: (branchId: string) =>
@@ -59,6 +77,14 @@ export const orderingApi = {
       '/restaurant/staff',
     ),
   addStaff: (body: unknown) => endpoint('/restaurant/staff', 'POST', body),
+  invitations: () =>
+    endpoint<{ id: string; email: string; role: string; expiresAt: string }[]>(
+      '/restaurant/invitations',
+    ),
+  sendInvitation: (email: string, role: 'MANAGER' | 'STAFF') =>
+    endpoint('/restaurant/invitations', 'POST', { email, role }),
+  revokeInvitation: (id: string) =>
+    endpoint(`/restaurant/invitations/${id}`, 'DELETE', {}),
   updateStaff: (id: string, body: unknown) =>
     endpoint(`/restaurant/staff/${id}`, 'PATCH', body),
   points: () => endpoint<ServicePoint[]>('/restaurant/service-points'),
