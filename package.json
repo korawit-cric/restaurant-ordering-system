@@ -30,7 +30,7 @@
     "prepare": "husky",
     "check-types": "turbo run check-types",
     "db:deploy": "npm run db:deploy -w @repo/prisma",
-    "test:integration": "node scripts/integration-test.cjs"
+    "test:integration": "node scripts/integration-test.cjs && node scripts/account-integration.cjs"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.2.0",

@@ -18,14 +18,24 @@ export class BoundaryMiddleware implements NestMiddleware {
     for (const [key, value] of this.buckets)
       if (value.until < now) this.buckets.delete(key);
     const login = req.path === '/auth/login';
+    const resetRequest = req.path === '/auth/password/request';
     if (req.method === 'POST') {
-      const key = `${req.socket.remoteAddress}:${login ? 'login' : 'write'}`;
+      let bucket = 'write';
+      let limit = 240;
+      if (resetRequest) {
+        bucket = 'reset';
+        limit = 60;
+      } else if (login) {
+        bucket = 'login';
+        limit = 15;
+      }
+      const key = `${req.socket.remoteAddress}:${bucket}`;
       let b = this.buckets.get(key);
       if (!b) {
         b = { count: 0, until: now + 60000 };
         this.buckets.set(key, b);
       }
-      if (++b.count > (login ? 15 : 240)) {
+      if (++b.count > limit) {
         res.setHeader('Retry-After', '60');
         return res
           .status(429)

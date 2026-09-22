@@ -85,6 +85,7 @@ model User {
   active       Boolean      @default(true)
   memberships  BranchUser[]
   sessions     AuthSession[]
+  passwordResets PasswordReset[]
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 }
@@ -98,6 +99,16 @@ model AuthSession {
   expiresAt DateTime
   createdAt DateTime @default(now())
   @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+model PasswordReset {
+  tokenHash String @id
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
   @@index([expiresAt])
 }
 
@@ -148,6 +159,7 @@ model Branch {
   nextOrderNumber Int      @default(1)
   settings    BranchSettings?
   members     BranchUser[]
+  invitations StaffInvitation[]
   menus       Menu[]
   servicePoints ServicePoint[]
   orderSessions OrderSession[]
@@ -157,6 +169,21 @@ model Branch {
   @@unique([tenantId, id])
   @@unique([tenantId, slug])
   @@index([tenantId, status])
+}
+
+model StaffInvitation {
+  id String @id @default(uuid())
+  tenantId String
+  branchId String
+  branch Branch @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  email String
+  role MemberRole
+  tokenHash String @unique
+  expiresAt DateTime
+  acceptedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([tenantId, branchId, email])
+  @@index([tenantId, branchId, expiresAt])
 }
 
 model BranchUser {

@@ -10,6 +10,11 @@ import {
   OperatorGuard,
 } from './security/auth';
 import { BoundaryMiddleware } from './security/boundary';
+import {
+  AccountController,
+  StaffInvitationController,
+} from './security/account.controller';
+import { EmailService } from './security/email.service';
 import { OrdersService } from './orders/orders.service';
 import { PaymentService } from './orders/payment.service';
 import { OrderEvents } from './orders/events';
@@ -24,6 +29,8 @@ import { TenancyController } from './tenancy/tenancy.controller';
   imports: [PrismaModule],
   controllers: [
     AuthController,
+    AccountController,
+    StaffInvitationController,
     CustomerController,
     StaffController,
     AdminController,
@@ -36,6 +43,7 @@ import { TenancyController } from './tenancy/tenancy.controller';
     MemberGuard,
     OperatorGuard,
     AuthService,
+    EmailService,
     OrdersService,
     PaymentService,
     OrderEvents,
