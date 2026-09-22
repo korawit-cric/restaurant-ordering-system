@@ -1,5 +1,7 @@
 # Ordering API
 
-NestJS application for the QR ordering MVP. See the [root README](../../README.md) for setup, rules, security and deployment.
+NestJS API for public QR ordering, authenticated restaurant operations, and a separate platform operator view. See the [root README](../../README.md) for setup and deployment.
 
-Public routes resolve `/public/tables/:token/menu` and create/read a specific order under that table. `/auth` manages staff sessions. `/staff` provides orders, status/payment actions, summary and SSE. `/admin` manages menu, categories, tables and QR images. Admin endpoints require ADMIN; operational endpoints allow STAFF or ADMIN.
+`/public/:kind/:token` resolves permanent (`q`) or session (`s`) QR links without customer login. `/auth` handles signup, login, branch context, and sessions. `/restaurant` manages branches, staff, settings, service points, and order sessions. `/admin` manages branch-scoped categories and products. `/staff` serves orders, reports, manual payments, and branch-filtered SSE. `/platform` requires an OPERATOR account.
+
+Every private request rechecks branch membership. Orders use serializable transactions, server-side Decimal totals, product snapshots, idempotency keys, and guarded state transitions.

@@ -1,3 +1,3 @@
 # Ordering web app
 
-Next.js App Router customer, staff and admin interfaces. See the [root README](../../README.md). API contracts live in `@repo/api-client`; fetching stays in this app. Local `/api` requests are forwarded to NestJS. Production Caddy forwards them directly for reliable SSE.
+Next.js App Router customer, staff, restaurant setup, and platform views. See the [root README](../../README.md). API endpoint contracts live in `@repo/api-client`; browser/server fetching stays in this app. Local `/api` requests are forwarded to NestJS; production Caddy forwards them directly so SSE streams flush promptly.
