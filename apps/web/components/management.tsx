@@ -1024,52 +1024,98 @@ export function StaffUsers() {
 }
 function StaffBody() {
   const cache = useQueryClient(),
+    me = useQuery({
+      queryKey: ['me'],
+      queryFn: () => clientFetch(orderingApi.me()),
+    }),
     q = useQuery({
       queryKey: ['staff-users'],
       queryFn: () => clientFetch(orderingApi.staff()),
+    }),
+    invitations = useQuery({
+      queryKey: ['staff-invitations'],
+      queryFn: () => clientFetch(orderingApi.invitations()),
     });
   const [error, setError] = useState<unknown>(null);
+  const [sent, setSent] = useState(false);
   return (
     <>
       <h1>Staff accounts</h1>
       <p>
-        Owners can create a manager or staff login for this branch. Give the
-        initial password directly to that person.
+        Invite a manager or staff member by email. The link expires in 48 hours.
+        They choose their own password when accepting.
       </p>
       <ErrorNotice error={error} />
-      <form
-        className="panel setup-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const f = new FormData(e.currentTarget);
-          void clientFetch(
-            orderingApi.addStaff({
-              email: f.get('email'),
-              password: f.get('password'),
-              role: f.get('role'),
-            }),
-          )
-            .then(() => cache.invalidateQueries({ queryKey: ['staff-users'] }))
-            .catch(setError);
-        }}
-      >
-        <label>
-          Email
-          <input name="email" type="email" required />
-        </label>
-        <label>
-          Initial password
-          <input name="password" type="password" minLength={12} required />
-        </label>
-        <label>
-          Role
-          <select name="role">
-            <option value="STAFF">Staff</option>
-            <option value="MANAGER">Manager</option>
-          </select>
-        </label>
-        <Action type="submit">Create account</Action>
-      </form>
+      {sent && <p>Invitation sent. Ask the recipient to check their email.</p>}
+      {me.data?.role === 'OWNER' && (
+        <form
+          className="panel setup-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSent(false);
+            const f = new FormData(e.currentTarget);
+            void clientFetch(
+              orderingApi.sendInvitation(
+                f.get('email') as string,
+                f.get('role') as 'MANAGER' | 'STAFF',
+              ),
+            )
+              .then(() => {
+                setSent(true);
+                return cache.invalidateQueries({
+                  queryKey: ['staff-invitations'],
+                });
+              })
+              .catch(setError);
+          }}
+        >
+          <label>
+            Email
+            <input name="email" type="email" required />
+          </label>
+          <label>
+            Role
+            <select name="role">
+              <option value="STAFF">Staff</option>
+              <option value="MANAGER">Manager</option>
+            </select>
+          </label>
+          <Action type="submit">Send invitation</Action>
+        </form>
+      )}
+      {!!invitations.data?.length && (
+        <div className="panel management-list">
+          <h2>Pending invitations</h2>
+          {invitations.data.map((invite) => (
+            <div className="management-row" key={invite.id}>
+              <strong className="management-name">
+                {invite.email}
+                <small>{invite.role}</small>
+              </strong>
+              <span>
+                Expires {new Date(invite.expiresAt).toLocaleDateString()}
+              </span>
+              {me.data?.role === 'OWNER' && (
+                <button
+                  onClick={() => {
+                    if (!confirm(`Revoke invitation for ${invite.email}?`))
+                      return;
+                    void clientFetch(orderingApi.revokeInvitation(invite.id))
+                      .then(() =>
+                        cache.invalidateQueries({
+                          queryKey: ['staff-invitations'],
+                        }),
+                      )
+                      .catch(setError);
+                  }}
+                >
+                  Revoke
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="panel management-list">
         {q.data?.map((u) => (
           <div className="management-row" key={u.id}>
@@ -1078,7 +1124,7 @@ function StaffBody() {
               <small>{u.role}</small>
             </strong>
             <Status value={u.active ? 'ACTIVE' : 'INACTIVE'} />
-            {u.role !== 'OWNER' && (
+            {me.data?.role === 'OWNER' && u.role !== 'OWNER' && (
               <button
                 onClick={() => {
                   if (

@@ -7,6 +7,8 @@
     "API_PORT",
     "API_INTERNAL_URL",
     "APP_ORIGIN",
+    "RESEND_API_KEY",
+    "EMAIL_FROM",
     "PROMPTPAY_QR_URL",
     "PAYMENT_RECIPIENT",
     "ADMIN_EMAIL",

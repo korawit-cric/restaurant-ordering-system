@@ -60,6 +60,9 @@ export default function Login() {
         </Action>
       </form>
       <p>
+        <Link href="/staff/forgot-password">Forgot password?</Link>
+      </p>
+      <p>
         <Link href="/signup">Create a restaurant</Link>
       </p>
     </main>
