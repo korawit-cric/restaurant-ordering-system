@@ -1,65 +1,62 @@
-# Restaurant Ordering System POC
+# Restaurant Ordering System POC · Orderly
 
-A single-location QR ordering system for a small Thai bar. Built from the Monex Turborepo template with Next.js, NestJS, Prisma and PostgreSQL.
+**Repository description:** Self-setup, multi-tenant QR ordering SaaS for small restaurants, bars, cafés, and food stalls—built with Next.js, NestJS, Prisma, PostgreSQL, and Turborepo.
 
-Each table has many independent orders. There is no open table bill, customer account, inventory system or automatic payment verification.
+Orderly lets a business register, choose a service workflow, add a menu and locations, print QR codes, and run a live order board on existing devices. It is intentionally lighter than a POS. Customers need only a browser and a valid QR. Cash and PromptPay are tracked separately from preparation status; PromptPay receipts are confirmed by staff, never assumed paid.
 
-## Run locally
+## Local setup
 
-Requires Node.js 22.12+, npm and Docker Compose v2 (or PostgreSQL).
+Requires Node.js 22.12+, npm, and PostgreSQL. Docker Compose can provide the local database.
 
 ```sh
 npm ci
-cp .env.example .env # only if .env was not created by npm
-```
-
-Edit `.env`: set `ADMIN_EMAIL` and a unique `ADMIN_PASSWORD` of at least 12 characters. Optionally set `STAFF_EMAIL` and `STAFF_PASSWORD` for an operational account. Seed never overwrites existing account passwords.
-
-```sh
+cp .env.example .env # only if npm did not create .env
 npm run env:distribute
 npm run db:start
 npm run db:deploy
 npm run build
-npm run db:seed
 npm run dev
 ```
 
-Open <http://localhost:3010/staff/login>. In **Tables**, open a table menu or print/download its QR. Customers enter through `/t/<random-token>`. The API runs on port 3011 and the local database on port 5444. These ports are separate from the source template defaults.
+Open `http://localhost:3010/signup` and register a restaurant. Onboarding guides you through categories, products, service points, QR printing, and a first test order. The web app listens on 3010, NestJS on 3011, and the local PostgreSQL Compose service on 5444. `APP_ORIGIN` must match the browser origin exactly. For phone testing, use an HTTPS origin reachable from the phone and print QR codes from that origin.
 
-`APP_ORIGIN` must exactly match the browser origin, including scheme and port. When testing on phones, use an HTTPS origin reachable by the phones and regenerate/reprint QR images with that origin. The opaque table tokens themselves remain stable.
+Migrations seed two _plan definitions_ (`starter`: one branch, `standard`: two branches) without seeding a default restaurant or password. New restaurants begin on a 30-day trial representation. Prices and subscription collection are business decisions, not implemented as automatic billing. To add a platform operator, set `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD` (12+ characters) and run `npm run db:seed`; restaurant owners sign up themselves. The seed does not overwrite an existing password.
 
-Seeded sample prices are demonstration values, not the restaurant's confirmed prices. Review them before service. The menu includes Leo, Chang, Singha, Regency, Coke, Coke Zero, soda, water, fries and fried chicken.
+## Workflows
 
-## Payments and operational rules
+| Preset                 | QR                | Session      | Payment     | Fulfillment       |
+| ---------------------- | ----------------- | ------------ | ----------- | ----------------- |
+| Table Service          | Permanent         | Open session | At checkout | Serve to location |
+| Bar / Flexible Seating | Temporary session | Open session | Per order   | Serve to location |
+| Quick Service          | Permanent         | Single order | Per order   | Pickup            |
+| Pickup / Food Stall    | Permanent         | Single order | Per order   | Pickup            |
 
-- Every order gets one payment, initially `PENDING`. Cash and QR orders immediately appear on the staff dashboard.
-- QR payment is manual. Set `PROMPTPAY_QR_URL` to a restaurant-provided HTTPS image URL or a same-origin path such as `/promptpay.png`, and set `PAYMENT_RECIPIENT`. A same-origin image belongs in `apps/web/public` before building. QR payment is disabled when no image is configured. Check the recipient and actual bank receipt before confirming. There is no simulated verification.
-- Staff can accept, prepare and serve independently of payment. Served-but-unpaid orders stay on the active board.
-- Only staff can confirm receipt. A confirmation is idempotent and records the confirming user's ID and payment time.
-- Cancellation requires confirmation and is allowed only before serving and before payment. Paid orders cannot be cancelled: refunds require a later explicit workflow. Staff cannot edit submitted items.
-- Menu/category deletion is archival (`active=false`). Temporarily sold-out items use `available=false`. Historical names, unit prices, line totals and table names remain unchanged.
-- Customers can check the status of a specific order from their confirmation link and immediately place another independent order.
-- Daily sales count confirmed payments by `paidAt` in Asia/Bangkok. Today's order count excludes cancelled orders and uses order creation date. These are deliberately separate measures.
+Owners and managers can change branch settings later. A permanent QR belongs to a ServicePoint, such as a table, bar seat, counter, or pickup spot. A temporary QR belongs to an OrderSession and stops accepting orders when it closes. Moving an active session to another ServicePoint keeps its token valid. Open sessions support repeated orders; a single-order session closes after its first order. For at-checkout branches, staff closes the session with a chosen payment method and confirms payment afterward.
+
+Print from the browser in A4 or compact 80 mm format, save a PDF through the browser print dialog, or download a PNG. Automatic printer control is outside v1.
+
+## Correctness and isolation
+
+PostgreSQL uses shared tables with `tenantId` and `branchId`; composite foreign keys enforce matching branch/tenant relationships. Restaurant APIs derive their scope from an authenticated `BranchUser` membership on every request. A known ID from another tenant cannot be read or changed. Staff roles are OWNER, MANAGER, and STAFF; the platform OPERATOR role is separate. Staff/admin APIs never accept a frontend tenant ID as authority.
+
+The server validates active QR destinations, products, categories, menus, quantities, availability, and expected prices. It computes totals with Prisma Decimal and PostgreSQL numeric columns. Order items preserve name, unit price, quantity, note, and line total snapshots. An order and its items are written in a serializable transaction. A unique tenant-scoped idempotency key returns the original order on double taps or network retries; the browser persists the exact pending request before sending it. Product availability is rechecked at submission even if a menu page is stale.
+
+Payment and fulfillment state machines are separate. For per-order payment, CASH or amount-specific PROMPTPAY remains PENDING until staff confirms receipt. For at-checkout branches, orders contribute to a session subtotal and payment is confirmed once on the closed session. PromptPay QR payloads are generated from a branch's configured recipient ID and the server-calculated amount. **There is no automatic bank verification.** Staff should confirm the actual receipt before pressing the confirmation button. Paid orders cannot be cancelled through the v1 UI; refund handling is external.
+
+SSE announces new/changed orders to a branch-scoped staff stream. The board always reloads database state and polls every 15 seconds, so refresh and reconnection recover correctly. Browser sound requires an explicit staff interaction and only plays for genuinely new orders after the initial load. The supplied deployment runs one NestJS API replica; an event broker would be needed before scaling SSE across replicas.
+
+Authenticated sessions use random HttpOnly, SameSite=Strict cookies with 12-hour expiry and Secure in production. Write requests require the configured origin and JSON content type. QR tokens grant public ordering only, not staff access.
 
 ## Structure
 
-- `apps/web`: Next.js App Router customer, staff and admin screens; frontend-owned fetching and TanStack Query.
-- `apps/api`: NestJS authentication, validation, ordering transactions, operations, management and SSE.
+- `apps/web`: Next.js App Router, mobile customer flow, setup, staff board, and operator overview. TanStack Query owns client server state.
+- `apps/api`: NestJS public/customer, restaurant, and platform routes; validation, transactions, membership checks, payment instructions, and SSE.
+- `packages/prisma`: shared schema, SQL migrations, Prisma client, and optional operator seed.
+- `packages/api-client`: runtime-agnostic typed endpoint contracts.
+- `packages/ui`, `design-system`, `icons`: existing shared template design assets.
 - `apps/db`: local PostgreSQL Compose service.
-- `packages/prisma`: schema, SQL migration, seed and shared client/types.
-- `packages/api-client`: typed endpoint contracts, with no fetch implementation.
-- `packages/ui`, `design-system`, `icons`: shared template components and styles.
-- Shared TypeScript, ESLint and Jest configuration stays in the existing packages.
 
-## Correctness and security
-
-Prices and totals are calculated on the server with Prisma Decimal / PostgreSQL numeric columns. The customer's expected unit price is used only to reject stale pricing, never to calculate amounts. The server validates active tables, active categories/products, availability, unique lines and integer quantities (1–30 per product, at most 40 lines).
-
-Order/items/payment creation uses one serializable transaction. A unique request key plus payload fingerprint recovers duplicate submissions and rejects key reuse with different contents. The browser persists the exact pending request before transmission and locks it across uncertain network failures and reloads. Price/availability rejections require reviewing the refreshed menu.
-
-Payment and cancellation operations lock the same order row so conflicting staff actions cannot leave a cancelled/paid order. All operational state is in PostgreSQL. SSE only announces changes: refresh, reconnection and 15-second polling reload authoritative state. New-event alerts require a staff interaction to enable sound; old orders and reconnect snapshots are silent. Live events run in one NestJS instance; keep one API replica for this MVP. Streams reconnect at least once per minute to revalidate authentication.
-
-Staff credentials use salted scrypt hashes. Database-backed sessions use random opaque cookies, HttpOnly, SameSite=Strict, 12-hour expiry and Secure in production. Admin routes enforce ADMIN separately from STAFF. Write requests require the configured origin and JSON content type. Basic bounded in-process request limiting is intentionally conservative behind a reverse proxy. API responses use no-store. Table tokens grant no staff/admin access and cannot list order history.
+The `202609220001_multi_tenant` migration preserves a deployed single-restaurant POC's users, menu, table QR tokens, orders, item snapshots, and payment states in one starter tenant/branch. Back up production data and test the migration on a restored copy before applying it live. The former `SERVED` state maps to `COMPLETED`, and former QR payment maps to PROMPTPAY.
 
 ## Tests
 
@@ -70,7 +67,7 @@ npm run check-types
 npm test
 ```
 
-For database integration tests, create a **disposable** PostgreSQL database whose name ends in `_test`. The test suite clears its domain tables.
+The integration suite **clears all domain tables** in the target database. Use only a disposable PostgreSQL database whose name ends in `_test`:
 
 ```sh
 DATABASE_URL=postgresql://postgres:postgres@localhost:5444/ordering_test npm run db:deploy
@@ -79,37 +76,20 @@ npx playwright install chromium
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5444/ordering_test npm run test:e2e
 ```
 
-Browser tests start the built API and web app on 3011/3010, exercise mobile ordering with a lost response and reload-safe retry, staff fulfillment, sold-out controls and printable table QR. Keep those ports free. Screenshots are written to `artifacts/`; browser recordings and traces go to `test-results/`. Test users use freshly generated passwords. CI runs build, lint, typechecks, unit tests, migrations and database integration tests against PostgreSQL 16.
+Integration checks cover tenant isolation, permission boundaries, branch limits, concurrent duplicate submissions, stale prices, sold-out products, snapshots, payment/status transitions, permanent and temporary QR behavior, session closure, and checkout totals. Browser tests exercise signup, mobile order recovery, staff fulfillment, sold-out propagation, and QR printing. Screenshots are written to `artifacts/`.
 
 ## Production deployment
 
-A single host can run the supplied Docker Compose stack: PostgreSQL 16, one NestJS API, Next.js, and Caddy for HTTPS. No Redis or message broker is required.
+The supplied Docker Compose stack runs PostgreSQL 16, one NestJS API, Next.js, and Caddy for HTTPS. No Redis, specialized POS hardware, or native apps are required.
 
-1. Point a domain's DNS to the host and allow inbound ports 80/443.
-2. Copy `.env.example` to `.env` and set strong credentials. Set `PUBLIC_HOST=order.your-domain.com`, `APP_ORIGIN=https://order.your-domain.com`, and `PRODUCTION_DATABASE_URL=postgresql://postgres:URL_ENCODED_PASSWORD@postgres:5432/restaurant_ordering`. Keep DB_USER/DB_PASSWORD/DB_NAME consistent with that URL. Configure the payment QR and recipient.
-3. Build and start:
+1. Point DNS at the host and allow ports 80/443.
+2. Set a strong database password and consistent `DB_*` values in `.env`. Set `PUBLIC_HOST`, `APP_ORIGIN=https://<host>`, and `PRODUCTION_DATABASE_URL` using the Compose hostname `postgres` and a URL-encoded password.
+3. Run `docker compose -f compose.production.yml up -d --build`. The migration job completes before the API starts.
+4. Optionally run `docker compose -f compose.production.yml exec api npm run db:seed` after configuring a platform operator.
+5. Register a restaurant through `/signup`, configure its branch PromptPay ID if accepting PromptPay, verify the bank recipient, and print QR codes from the production domain.
 
-   ```sh
-   docker compose -f compose.production.yml up -d --build
-   docker compose -f compose.production.yml exec api npm run db:seed
-   ```
+Back up and restore PostgreSQL regularly. Verify HTTPS, staff login, physical QR scans, network retry recovery, manual payment confirmation, and dashboard sound on the intended devices before live service. The repository contains a deployment stack, but deployment and payment-provider onboarding remain operator responsibilities.
 
-The migration job must succeed before the API starts. Only Caddy exposes public ports. Caddy forwards `/api/*` directly to NestJS with immediate flushing for SSE. Cookie authentication therefore stays same-origin. The image contains no `.env` secrets. The runtime uses the unprivileged `node` user.
+## Deliberate v1 limits
 
-Back up the PostgreSQL volume regularly and test restoration. Before service, verify HTTPS login, real table QR scanning from a phone, the bank recipient, manual payment confirmation and staff notification sound on the intended tablet. The Docker production stack is supplied for deployment; building the application locally is not evidence of a deployed production service.
-
-## Deliberate limits
-
-One location, one API process, manual payment confirmation, no refunds, no staff order editing, no tax receipts, no printer integration, no inventory, and no offline ordering. Additional accounts can be provisioned through seed environment variables with new email addresses; account-management UI is outside this MVP. Menus refresh every 10 seconds, and order creation always rechecks availability. Optional image URLs do not require an upload service.
-
-## Dependency maintenance
-
-The template's compatible framework updates are locked in `package-lock.json`. Root npm overrides select patched versions of multer, deepmerge-ts, mysql2 and ajv while retaining the existing framework majors. Recheck these overrides when upgrading their parent packages, and run build plus database integration tests after dependency changes.
-
-## Verified workflow screenshots
-
-Captured from the end-to-end test with disposable sample data:
-
-- [Customer mobile menu](artifacts/customer-menu.png)
-- [Live staff dashboard](artifacts/staff-dashboard.png)
-- [Printable table QR](artifacts/table-qr.png)
+Automatic subscription billing, automatic PromptPay verification, refund processing, password reset/email invitations, tax receipts, stock accounting, native apps, automatic thermal printing, offline sync, and multiple API replicas are not included. Owners can provision staff with an initial password and pass it to them directly; managed invitations can be added later. The platform operator view is intentionally small. A single branch's reports show today's order count, confirmed cash/PromptPay sales, recent daily sales, and top products.
