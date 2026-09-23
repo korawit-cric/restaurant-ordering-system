@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { orderingApi } from '@repo/api-client';
 import { clientFetch } from '../lib/fetch/client';
@@ -13,6 +14,10 @@ export function CustomerOrder({
   token: string;
   id: string;
 }) {
+  const [reference, setReference] = useState('');
+  const [note, setNote] = useState('');
+  const [claimBusy, setClaimBusy] = useState(false);
+  const [claimError, setClaimError] = useState<unknown>(null);
   const query = useQuery({
     queryKey: ['order', kind, token, id],
     queryFn: () => clientFetch(orderingApi.order(kind, token, id)),
@@ -26,6 +31,23 @@ export function CustomerOrder({
       !!o && o.paymentMethod === 'PROMPTPAY' && o.paymentStatus === 'PENDING',
     retry: false,
   });
+  async function submitClaim() {
+    setClaimBusy(true);
+    setClaimError(null);
+    try {
+      await clientFetch(
+        orderingApi.submitPaymentClaim(kind, token, id, {
+          ...(reference.trim() ? { reference: reference.trim() } : {}),
+          ...(note.trim() ? { note: note.trim() } : {}),
+        }),
+      );
+      await query.refetch();
+    } catch (error) {
+      setClaimError(error);
+    } finally {
+      setClaimBusy(false);
+    }
+  }
   return (
     <main className="customer confirmation">
       <div className="wordmark">ORDERLY</div>
@@ -72,9 +94,54 @@ export function CustomerOrder({
                 />
               )}
               <p>
-                Check the recipient in your banking app. Staff confirms payment
-                manually.
+                Check the recipient and amount in your banking app. After
+                paying, tell staff below. This does not mark the order paid
+                until staff sees the deposit in the restaurant account.
               </p>
+              {o.paymentClaim?.status === 'SUBMITTED' ? (
+                <div className="notice">
+                  Payment sent notice submitted. Staff is checking the bank
+                  account.
+                </div>
+              ) : (
+                <div className="payment-claim">
+                  {o.paymentClaim?.status === 'REJECTED' && (
+                    <div className="notice error">
+                      Staff could not match the payment
+                      {o.paymentClaim.reviewNote
+                        ? `: ${o.paymentClaim.reviewNote}`
+                        : '. Please check and submit again.'}
+                    </div>
+                  )}
+                  <label>
+                    Bank reference (optional)
+                    <input
+                      value={reference}
+                      maxLength={100}
+                      onChange={(event) => setReference(event.target.value)}
+                      placeholder="Reference shown by your bank"
+                    />
+                  </label>
+                  <label>
+                    Note (optional)
+                    <input
+                      value={note}
+                      maxLength={240}
+                      onChange={(event) => setNote(event.target.value)}
+                      placeholder="Paying bank or transfer time"
+                    />
+                  </label>
+                  <ErrorNotice error={claimError} />
+                  <button
+                    className="button primary"
+                    type="button"
+                    disabled={claimBusy}
+                    onClick={() => void submitClaim()}
+                  >
+                    {claimBusy ? 'Submitting…' : 'I have paid'}
+                  </button>
+                </div>
+              )}
             </section>
           )}
           {o.paymentStatus === 'PENDING' && o.paymentMethod === 'CASH' && (

@@ -440,6 +440,58 @@ footer {
   margin: 20px auto;
   display: block;
 }
+.payment-claim,
+.payment-review,
+.refunds {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+.payment-claim label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.payment-review {
+  border: 1px solid #d5c96c;
+  background: #fffbe0;
+  border-radius: 10px;
+  padding: 12px;
+}
+.payment-review small,
+.refund-row small,
+.refunds > small {
+  color: var(--muted);
+}
+.refunds {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.refund-heading,
+.refund-row,
+.refund-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.refund-heading h3 {
+  margin: 0;
+}
+.refund-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+}
+.refund-row > div:first-child {
+  display: grid;
+  gap: 6px;
+}
+.refund-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .confirmation {
   text-align: center;
 }
