@@ -144,7 +144,12 @@ function Orders({ history, id }: { history: boolean; id?: string }) {
       {orders.length ? (
         <div className="orders-grid">
           {orders.map((o: Order) => (
-            <OrderCard key={o.id} order={o} highlight={fresh === o.id} />
+            <OrderCard
+              key={o.id}
+              order={o}
+              highlight={fresh === o.id}
+              detailed={!!id}
+            />
           ))}
         </div>
       ) : (

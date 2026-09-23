@@ -16,7 +16,7 @@ import { takeUntil, timer } from 'rxjs';
 import { OrdersService } from './orders.service';
 import { OrderEvents } from './events';
 import { parse } from './rules';
-import { MemberGuard, type AuthRequest } from '../security/auth';
+import { MemberGuard, requireRole, type AuthRequest } from '../security/auth';
 import { PaymentService } from './payment.service';
 @Controller('public/:kind/:token')
 export class CustomerController {
@@ -56,6 +56,14 @@ export class CustomerController {
   ) {
     const order = await this.orders.customerOrder(this.kind(kind), token, id);
     return this.payment.orderPromptPay(order);
+  }
+  @Post('orders/:id/payment-claim') claim(
+    @Param('kind') kind: string,
+    @Param('token') token: string,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.orders.submitPaymentClaim(this.kind(kind), token, id, body);
   }
 }
 @Controller('staff')
@@ -110,8 +118,40 @@ export class StaffController {
   @Post('orders/:id/payment') paymentConfirm(
     @Req() req: AuthRequest,
     @Param('id') id: string,
+    @Body() body: unknown,
   ) {
-    return this.orders.confirmPayment(req, id);
+    return this.orders.confirmPayment(req, id, body);
+  }
+  @Post('orders/:id/payment-claim/reject') rejectPaymentClaim(
+    @Req() req: AuthRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.orders.rejectPaymentClaim(req, id, body);
+  }
+  @Post('orders/:id/refunds') createRefund(
+    @Req() req: AuthRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.orders.createRefund(req, id, body);
+  }
+  @Post('orders/:orderId/refunds/:refundId/complete') completeRefund(
+    @Req() req: AuthRequest,
+    @Param('orderId') orderId: string,
+    @Param('refundId') refundId: string,
+    @Body() body: unknown,
+  ) {
+    requireRole(req, ['OWNER', 'MANAGER']);
+    return this.orders.completeRefund(req, orderId, refundId, body);
+  }
+  @Post('orders/:orderId/refunds/:refundId/cancel') cancelRefund(
+    @Req() req: AuthRequest,
+    @Param('orderId') orderId: string,
+    @Param('refundId') refundId: string,
+  ) {
+    requireRole(req, ['OWNER', 'MANAGER']);
+    return this.orders.cancelRefund(req, orderId, refundId);
   }
   @Get('sessions/:id/promptpay') promptpay(
     @Req() req: AuthRequest,

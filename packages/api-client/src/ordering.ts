@@ -35,6 +35,17 @@ export const orderingApi = {
     endpoint<{ svg: string; amount: string; manualConfirmation: true }>(
       `${pub(kind, token)}/orders/${id}/promptpay`,
     ),
+  submitPaymentClaim: (
+    kind: 'q' | 's',
+    token: string,
+    id: string,
+    body: { reference?: string; note?: string },
+  ) =>
+    endpoint<Order>(
+      `${pub(kind, token)}/orders/${id}/payment-claim`,
+      'POST',
+      body,
+    ),
   signup: (body: unknown) => endpoint<User>('/auth/signup', 'POST', body),
   login: (email: string, password: string) =>
     endpoint<User>('/auth/login', 'POST', { email, password }),
@@ -109,8 +120,11 @@ export const orderingApi = {
     endpoint<OrderSession>(`/restaurant/sessions/${id}/close`, 'POST', {
       method: method || null,
     }),
-  confirmSession: (id: string) =>
-    endpoint<OrderSession>(`/restaurant/sessions/${id}/payment`, 'POST', {}),
+  confirmSession: (
+    id: string,
+    body: { reference?: string; note?: string } = {},
+  ) =>
+    endpoint<OrderSession>(`/restaurant/sessions/${id}/payment`, 'POST', body),
   sessionPromptpay: (id: string) =>
     endpoint<{ svg: string; amount: string }>(
       `/staff/sessions/${id}/promptpay`,
@@ -122,8 +136,29 @@ export const orderingApi = {
   detail: (id: string) => endpoint<Order>(`/staff/orders/${id}`),
   status: (id: string, status: OrderStatus) =>
     endpoint<Order>(`/staff/orders/${id}/status`, 'PATCH', { status }),
-  confirm: (id: string) =>
-    endpoint<Order>(`/staff/orders/${id}/payment`, 'POST', {}),
+  confirm: (id: string, body: { reference?: string; note?: string } = {}) =>
+    endpoint<Order>(`/staff/orders/${id}/payment`, 'POST', body),
+  rejectPaymentClaim: (id: string, reason: string) =>
+    endpoint<Order>(`/staff/orders/${id}/payment-claim/reject`, 'POST', {
+      reason,
+    }),
+  createRefund: (
+    id: string,
+    body: {
+      amount: string;
+      method: 'CASH' | 'BANK_TRANSFER';
+      reason: string;
+      reference?: string;
+    },
+  ) => endpoint(`/staff/orders/${id}/refunds`, 'POST', body),
+  completeRefund: (orderId: string, refundId: string, reference?: string) =>
+    endpoint(
+      `/staff/orders/${orderId}/refunds/${refundId}/complete`,
+      'POST',
+      reference ? { reference } : {},
+    ),
+  cancelRefund: (orderId: string, refundId: string) =>
+    endpoint(`/staff/orders/${orderId}/refunds/${refundId}/cancel`, 'POST', {}),
   summary: () => endpoint<Summary>('/staff/summary'),
   daily: (days = 7) =>
     endpoint<

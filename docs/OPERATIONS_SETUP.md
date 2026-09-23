@@ -16,7 +16,16 @@ The integration uses [Resend's Send Email API](https://resend.com/docs/api-refer
 
 ## PromptPay: choose a payment provider before enabling automatic confirmation
 
-Orderly currently creates an amount-filled PromptPay QR for a branch's configured recipient ID. This QR has **no transaction reference that Orderly can verify**. It stays pending until a staff member confirms the actual bank receipt. Do not mark it paid from a customer screenshot, the QR amount, or a browser callback.
+Orderly currently creates an amount-filled PromptPay QR for a branch's configured recipient ID. This QR has **no transaction reference that Orderly can verify**. It stays pending until a staff member confirms the deposit in the receiving bank account. The customer can press **I have paid** and optionally enter the reference shown by their bank. This only creates a review claim; it never marks the order paid.
+
+For the no-provider workflow:
+
+1. Configure and test the branch PromptPay recipient in `/admin/settings`.
+2. The customer scans the amount-specific QR and presses **I have paid** after transferring.
+3. Staff sees the claim on the order card, opens the restaurant's bank app or statement independently, and matches recipient account, exact amount, and a plausible transfer time. Do not rely on a screenshot supplied by the payer.
+4. Staff presses **Confirm PromptPay** and records the reference from the receiving bank account. Orderly then stores the reviewer, time, reference, and optional note and marks payment paid. Staff can reject an unmatched claim with a reason, after which the customer may correct and resubmit it.
+
+This is an audited manual control, not automatic PromptPay verification. It does not prove a transfer through the PromptPay network and cannot discover a deposit without a person checking the receiving account.
 
 Two documented gateway paths are:
 
@@ -35,11 +44,13 @@ The implementation sequence is:
 
 There is no automatic-verification adapter in this repository yet. The provider, merchant-account model, live/test credentials, and webhook secret are still required decisions. Do not put them in `BranchSettings` as plaintext.
 
-## Refunds: record the money movement, not merely an order status
+## Refunds: implemented as a manual operational record
 
-For the PromptPay options above, the cited channel guides do not offer API refunds. A restaurant must arrange a bank transfer or another provider-approved refund process. The order should remain historically **paid**; a separate refund record should carry amount, reason, actor, time, payment reference, recipient confirmation, and the external transfer reference. A partial refund must not be represented by changing the original order total. Reports should show gross sales and refunds separately, then net sales. A cancelled order must not silently imply that money was returned.
+For the PromptPay options above, the cited channel guides do not offer API refunds. Orderly therefore records a manual refund while the restaurant returns money by cash or bank transfer outside the app. From a paid order's detail page, staff can request a full or partial refund with its amount, method, and reason. Pending and completed refunds reserve value so their combined amount cannot exceed the original payment. An owner or manager marks the refund completed only after money is returned; a bank transfer requires its transaction reference. They can cancel a pending request.
 
-Before building a refund screen, confirm whether refunds are full or partial, who may approve them, whether cash refunds are allowed, what evidence is retained, and whether returned goods re-enter stock. If the chosen gateway later supports a specific refund API, the server can add provider idempotency, webhook reconciliation, and a `REQUESTED → SUCCEEDED/FAILED` lifecycle. Do not call a bank transfer or a staff checkbox an automatic refund.
+The order remains historically **paid**. Refund amount, reason, requester, completion/cancellation actor and time, and external reference are separate audit data. A partial refund does not change the original order total, and cancelling an order does not imply money was returned. Current sales summaries remain gross payment reports; use the refund records separately until net-sales reporting is added.
+
+Before live use, decide who may request refunds, whether cash refunds are allowed, what evidence is retained, and whether returned goods re-enter stock. The current policy allows any branch staff member to request a refund and restricts completion/cancellation to owners and managers. If the chosen gateway later supports a specific refund API, the server can add provider idempotency, webhook reconciliation, and a `REQUESTED → SUCCEEDED/FAILED` lifecycle. Do not call a bank transfer or a staff checkbox an automatic refund.
 
 ## Thai receipts and tax invoices: confirm registration before issuing
 

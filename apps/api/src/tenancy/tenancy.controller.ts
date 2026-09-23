@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   ConflictException,
   Controller,
@@ -530,8 +531,18 @@ export class TenancyController {
   @Post('sessions/:id/payment') async confirmSession(
     @Req() req: AuthRequest,
     @Param('id') id: string,
+    @Body() body: unknown,
   ) {
     requireRole(req, ['OWNER', 'MANAGER', 'STAFF']);
+    const data = parse(
+      z
+        .object({
+          reference: z.string().trim().min(2).max(100).optional(),
+          note: z.string().trim().max(240).optional(),
+        })
+        .strict(),
+      body,
+    );
     return this.db.client.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "OrderSession" WHERE id = ${id} AND "tenantId" = ${req.tenantId} AND "branchId" = ${req.branchId} FOR UPDATE`;
       const session = await tx.orderSession.findFirst({
@@ -545,12 +556,18 @@ export class TenancyController {
       if (!session || !session.paymentMethod)
         throw new NotFoundException('Checkout not found');
       if (session.paymentStatus === 'PAID') return session;
+      if (session.paymentMethod === 'PROMPTPAY' && !data.reference)
+        throw new BadRequestException(
+          'Enter the bank transaction reference after checking the receiving account',
+        );
       const updated = await tx.orderSession.update({
         where: { id },
         data: {
           paymentStatus: 'PAID',
           paidAt: new Date(),
           confirmedBy: req.user.id,
+          paymentReference: data.reference || null,
+          paymentNote: data.note || null,
         },
       });
       await tx.order.updateMany({
@@ -564,6 +581,8 @@ export class TenancyController {
           paymentStatus: 'PAID',
           paidAt: new Date(),
           confirmedBy: req.user.id,
+          paymentReference: data.reference || null,
+          paymentNote: data.note || null,
         },
       });
       return updated;

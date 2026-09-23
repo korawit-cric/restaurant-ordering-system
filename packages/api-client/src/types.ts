@@ -7,6 +7,9 @@ export type OrderStatus =
   | 'CANCELLED';
 export type PaymentStatus = 'PENDING' | 'PAID' | 'FAILED' | 'CANCELLED';
 export type PaymentMethod = 'CASH' | 'PROMPTPAY';
+export type PaymentClaimStatus = 'SUBMITTED' | 'VERIFIED' | 'REJECTED';
+export type RefundStatus = 'PENDING' | 'COMPLETED' | 'CANCELLED';
+export type RefundMethod = 'CASH' | 'BANK_TRANSFER';
 export type Preset =
   | 'TABLE_SERVICE'
   | 'BAR_FLEXIBLE'
@@ -65,6 +68,8 @@ export interface OrderSession {
   subtotal: string;
   paymentMethod: PaymentMethod | null;
   paymentStatus: PaymentStatus;
+  paymentReference: string | null;
+  paymentNote: string | null;
   _count?: { orders: number };
   servicePoint?: ServicePoint | null;
 }
@@ -127,6 +132,17 @@ export interface Order {
   total: string;
   subtotal: string;
   paidAt: string | null;
+  paymentReference: string | null;
+  paymentNote: string | null;
+  paymentClaim?: {
+    status: PaymentClaimStatus;
+    customerReference: string | null;
+    customerNote: string | null;
+    submittedAt: string;
+    reviewedAt: string | null;
+    reviewNote: string | null;
+  } | null;
+  refunds?: ManualRefund[];
   createdAt: string;
   items: OrderItem[];
   session?: {
@@ -136,6 +152,18 @@ export interface Order {
     status: string;
   } | null;
   servicePoint?: { id: string; name: string; type: string } | null;
+}
+export interface ManualRefund {
+  id: string;
+  orderId: string;
+  amount: string;
+  method: RefundMethod;
+  status: RefundStatus;
+  reason: string;
+  reference: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
 }
 export interface CreateOrder {
   requestKey: string;

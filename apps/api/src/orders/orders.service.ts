@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma, OrderStatus } from '@repo/prisma';
+import { z } from 'zod';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrderEvents } from './events';
 import {
@@ -22,7 +23,21 @@ const include = {
     select: { id: true, label: true, description: true, status: true },
   },
   servicePoint: { select: { id: true, name: true, type: true } },
+  paymentClaim: {
+    select: {
+      status: true,
+      customerReference: true,
+      customerNote: true,
+      submittedAt: true,
+      reviewedAt: true,
+      reviewNote: true,
+    },
+  },
 } as const;
+const staffInclude = {
+  ...include,
+  refunds: { orderBy: { createdAt: 'desc' as const } },
+};
 @Injectable()
 export class OrdersService {
   constructor(
@@ -333,6 +348,67 @@ export class OrdersService {
     if (!order) throw new NotFoundException();
     return this.safe(order);
   }
+  async submitPaymentClaim(
+    kind: 'q' | 's',
+    token: string,
+    id: string,
+    body: unknown,
+  ) {
+    const data = parse(
+      z
+        .object({
+          reference: z.string().trim().min(2).max(100).optional(),
+          note: z.string().trim().max(240).optional(),
+        })
+        .strict(),
+      body,
+    );
+    const target = await this.target(kind, token);
+    const order = await this.db.client.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${id} AND "tenantId" = ${target.tenantId} AND "branchId" = ${target.branchId} FOR UPDATE`;
+      const current = await tx.order.findFirst({
+        where: {
+          id,
+          tenantId: target.tenantId,
+          branchId: target.branchId,
+          ...(kind === 's'
+            ? { sessionId: target.session?.id }
+            : { servicePointId: target.point?.id }),
+        },
+      });
+      if (!current) throw new NotFoundException();
+      if (
+        current.paymentMethod !== 'PROMPTPAY' ||
+        current.paymentStatus !== 'PENDING' ||
+        current.status === 'CANCELLED'
+      )
+        throw new ConflictException(
+          'This payment cannot be submitted for review',
+        );
+      await tx.paymentClaim.upsert({
+        where: { orderId: current.id },
+        create: {
+          tenantId: current.tenantId,
+          branchId: current.branchId,
+          orderId: current.id,
+          customerReference: data.reference || null,
+          customerNote: data.note || null,
+        },
+        update: {
+          status: 'SUBMITTED',
+          customerReference: data.reference || null,
+          customerNote: data.note || null,
+          submittedAt: new Date(),
+          reviewedAt: null,
+          reviewedBy: null,
+          reviewNote: null,
+        },
+      });
+      return tx.order.findUniqueOrThrow({ where: { id }, include });
+    });
+    this.events.publish(order.branchId, 'changed', order.id);
+    return this.safe(order);
+  }
   async list(req: AuthRequest, history = false, cursor?: string) {
     const where = {
       tenantId: req.tenantId,
@@ -360,7 +436,7 @@ export class OrdersService {
     };
     const orders = await this.db.client.order.findMany({
       where,
-      include,
+      include: staffInclude,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: history ? 51 : 200,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -374,7 +450,7 @@ export class OrdersService {
   async detail(req: AuthRequest, id: string) {
     const order = await this.db.client.order.findFirst({
       where: { id, tenantId: req.tenantId, branchId: req.branchId },
-      include,
+      include: staffInclude,
     });
     if (!order) throw new NotFoundException();
     return this.safe(order);
@@ -415,7 +491,16 @@ export class OrdersService {
     this.events.publish(req.branchId, 'changed', id);
     return this.safe(order);
   }
-  async confirmPayment(req: AuthRequest, id: string) {
+  async confirmPayment(req: AuthRequest, id: string, body: unknown) {
+    const data = parse(
+      z
+        .object({
+          reference: z.string().trim().min(2).max(100).optional(),
+          note: z.string().trim().max(240).optional(),
+        })
+        .strict(),
+      body,
+    );
     const order = await this.db.client.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${id} AND "tenantId" = ${req.tenantId} AND "branchId" = ${req.branchId} FOR UPDATE`;
       const current = await tx.order.findFirst({
@@ -430,17 +515,183 @@ export class OrdersService {
       )
         throw new ConflictException('This order payment cannot be confirmed');
       if (current.paymentStatus === 'PAID') return current;
-      return tx.order.update({
+      if (current.paymentMethod === 'PROMPTPAY' && !data.reference)
+        throw new BadRequestException(
+          'Enter the bank transaction reference after checking the receiving account',
+        );
+      const updated = await tx.order.update({
         where: { id },
         data: {
           paymentStatus: 'PAID',
           paidAt: new Date(),
           confirmedBy: req.user.id,
+          paymentReference: data.reference || null,
+          paymentNote: data.note || null,
+        },
+      });
+      if (current.paymentMethod === 'PROMPTPAY')
+        await tx.paymentClaim.updateMany({
+          where: {
+            tenantId: req.tenantId,
+            branchId: req.branchId,
+            orderId: id,
+          },
+          data: {
+            status: 'VERIFIED',
+            reviewedAt: new Date(),
+            reviewedBy: req.user.id,
+            reviewNote: data.note || null,
+          },
+        });
+      return updated;
+    });
+    this.events.publish(req.branchId, 'changed', id);
+    return this.safe(order);
+  }
+  async rejectPaymentClaim(req: AuthRequest, id: string, body: unknown) {
+    const { reason } = parse(
+      z.object({ reason: z.string().trim().min(2).max(240) }).strict(),
+      body,
+    );
+    await this.db.client.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${id} AND "tenantId" = ${req.tenantId} AND "branchId" = ${req.branchId} FOR UPDATE`;
+      const claim = await tx.paymentClaim.findFirst({
+        where: {
+          orderId: id,
+          tenantId: req.tenantId,
+          branchId: req.branchId,
+          status: 'SUBMITTED',
+          order: { paymentMethod: 'PROMPTPAY', paymentStatus: 'PENDING' },
+        },
+      });
+      if (!claim) throw new NotFoundException('No submitted payment claim');
+      await tx.paymentClaim.update({
+        where: { id: claim.id },
+        data: {
+          status: 'REJECTED',
+          reviewedAt: new Date(),
+          reviewedBy: req.user.id,
+          reviewNote: reason,
         },
       });
     });
     this.events.publish(req.branchId, 'changed', id);
-    return this.safe(order);
+    return this.detail(req, id);
+  }
+  async createRefund(req: AuthRequest, id: string, body: unknown) {
+    const data = parse(
+      z
+        .object({
+          amount: z.string().regex(/^\d{1,8}(\.\d{1,2})?$/),
+          method: z.enum(['CASH', 'BANK_TRANSFER']),
+          reason: z.string().trim().min(2).max(240),
+          reference: z.string().trim().min(2).max(100).optional(),
+        })
+        .strict(),
+      body,
+    );
+    const refund = await this.db.client.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${id} AND "tenantId" = ${req.tenantId} AND "branchId" = ${req.branchId} FOR UPDATE`;
+      const order = await tx.order.findFirst({
+        where: { id, tenantId: req.tenantId, branchId: req.branchId },
+      });
+      if (!order) throw new NotFoundException();
+      if (order.paymentStatus !== 'PAID')
+        throw new ConflictException('Only a paid order can be refunded');
+      const amount = new Prisma.Decimal(data.amount);
+      const reserved = await tx.manualRefund.aggregate({
+        where: {
+          tenantId: req.tenantId,
+          branchId: req.branchId,
+          orderId: id,
+          status: { in: ['PENDING', 'COMPLETED'] },
+        },
+        _sum: { amount: true },
+      });
+      if (
+        amount.lte(0) ||
+        amount
+          .add(reserved._sum.amount || new Prisma.Decimal(0))
+          .gt(order.total)
+      )
+        throw new ConflictException('Refund exceeds the remaining paid amount');
+      return tx.manualRefund.create({
+        data: {
+          tenantId: req.tenantId,
+          branchId: req.branchId,
+          orderId: id,
+          amount,
+          method: data.method,
+          reason: data.reason,
+          reference: data.reference || null,
+          createdBy: req.user.id,
+        },
+      });
+    });
+    return refund;
+  }
+  async completeRefund(
+    req: AuthRequest,
+    orderId: string,
+    refundId: string,
+    body: unknown,
+  ) {
+    const { reference } = parse(
+      z
+        .object({ reference: z.string().trim().min(2).max(100).optional() })
+        .strict(),
+      body,
+    );
+    return this.db.client.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "ManualRefund" WHERE id = ${refundId} AND "tenantId" = ${req.tenantId} AND "branchId" = ${req.branchId} AND "orderId" = ${orderId} FOR UPDATE`;
+      const refund = await tx.manualRefund.findFirst({
+        where: {
+          id: refundId,
+          orderId,
+          tenantId: req.tenantId,
+          branchId: req.branchId,
+        },
+      });
+      if (!refund) throw new NotFoundException();
+      if (refund.status !== 'PENDING')
+        throw new ConflictException('This refund is no longer pending');
+      const finalReference = reference || refund.reference;
+      if (refund.method === 'BANK_TRANSFER' && !finalReference)
+        throw new BadRequestException('Enter the bank transfer reference');
+      return tx.manualRefund.update({
+        where: { id: refund.id },
+        data: {
+          status: 'COMPLETED',
+          reference: finalReference,
+          completedAt: new Date(),
+          completedBy: req.user.id,
+        },
+      });
+    });
+  }
+  async cancelRefund(req: AuthRequest, orderId: string, refundId: string) {
+    return this.db.client.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "ManualRefund" WHERE id = ${refundId} AND "tenantId" = ${req.tenantId} AND "branchId" = ${req.branchId} AND "orderId" = ${orderId} FOR UPDATE`;
+      const refund = await tx.manualRefund.findFirst({
+        where: {
+          id: refundId,
+          orderId,
+          tenantId: req.tenantId,
+          branchId: req.branchId,
+        },
+      });
+      if (!refund) throw new NotFoundException();
+      if (refund.status !== 'PENDING')
+        throw new ConflictException('This refund is no longer pending');
+      return tx.manualRefund.update({
+        where: { id: refund.id },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt: new Date(),
+          cancelledBy: req.user.id,
+        },
+      });
+    });
   }
   async summary(req: AuthRequest) {
     const branch = await this.db.client.branch.findFirstOrThrow({

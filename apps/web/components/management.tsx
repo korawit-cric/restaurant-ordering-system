@@ -616,10 +616,26 @@ function SessionBody() {
             {s.status === 'CLOSED' && (
               <button
                 onClick={() => {
-                  if (confirm('Confirm full payment received?'))
+                  if (s.paymentMethod === 'PROMPTPAY') {
+                    const reference = prompt(
+                      'Check the receiving bank account, then enter its transaction reference:',
+                    );
+                    if (!reference?.trim()) return;
+                    const note =
+                      prompt('Optional verification note:', '') || '';
+                    void action(() =>
+                      clientFetch(
+                        orderingApi.confirmSession(s.id, {
+                          reference: reference.trim(),
+                          ...(note.trim() ? { note: note.trim() } : {}),
+                        }),
+                      ),
+                    );
+                  } else if (confirm('Confirm full cash payment received?')) {
                     void action(() =>
                       clientFetch(orderingApi.confirmSession(s.id)),
                     );
+                  }
                 }}
               >
                 Confirm checkout payment

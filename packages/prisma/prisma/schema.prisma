@@ -76,6 +76,20 @@ enum PaymentMethod {
   CASH
   PROMPTPAY
 }
+enum PaymentClaimStatus {
+  SUBMITTED
+  VERIFIED
+  REJECTED
+}
+enum RefundStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+enum RefundMethod {
+  CASH
+  BANK_TRANSFER
+}
 
 model User {
   id           String       @id @default(uuid())
@@ -164,6 +178,8 @@ model Branch {
   servicePoints ServicePoint[]
   orderSessions OrderSession[]
   orders      Order[]
+  paymentClaims PaymentClaim[]
+  refunds     ManualRefund[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   @@unique([tenantId, id])
@@ -305,6 +321,8 @@ model OrderSession {
   subtotal       Decimal       @default(0) @db.Decimal(10,2)
   paidAt         DateTime?
   confirmedBy    String?
+  paymentReference String?
+  paymentNote    String?
   orders         Order[]
   @@unique([tenantId, branchId, id])
   @@index([tenantId, branchId, status, openedAt])
@@ -331,6 +349,10 @@ model Order {
   total          Decimal        @db.Decimal(10,2)
   paidAt         DateTime?
   confirmedBy    String?
+  paymentReference String?
+  paymentNote    String?
+  paymentClaim   PaymentClaim?
+  refunds        ManualRefund[]
   items          OrderItem[]
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -340,6 +362,48 @@ model Order {
   @@index([tenantId, branchId, status, createdAt])
   @@index([tenantId, branchId, sessionId, createdAt])
   @@index([tenantId, branchId, paymentStatus, paidAt])
+}
+
+model PaymentClaim {
+  id                String             @id @default(uuid())
+  tenantId          String
+  branchId          String
+  branch            Branch             @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  orderId           String             @unique
+  order             Order              @relation(fields: [tenantId, branchId, orderId], references: [tenantId, branchId, id], onDelete: Restrict)
+  status            PaymentClaimStatus @default(SUBMITTED)
+  customerReference String?
+  customerNote      String?
+  submittedAt       DateTime           @default(now())
+  reviewedAt        DateTime?
+  reviewedBy        String?
+  reviewNote        String?
+  updatedAt         DateTime           @updatedAt
+  @@unique([tenantId, branchId, orderId])
+  @@index([tenantId, branchId, status, submittedAt])
+}
+
+model ManualRefund {
+  id                String       @id @default(uuid())
+  tenantId          String
+  branchId          String
+  branch            Branch       @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  orderId           String
+  order             Order        @relation(fields: [tenantId, branchId, orderId], references: [tenantId, branchId, id], onDelete: Restrict)
+  amount            Decimal      @db.Decimal(10,2)
+  method            RefundMethod
+  status            RefundStatus @default(PENDING)
+  reason            String
+  reference         String?
+  createdBy         String
+  completedBy       String?
+  completedAt       DateTime?
+  cancelledBy       String?
+  cancelledAt       DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  @@index([tenantId, branchId, orderId, createdAt])
+  @@index([tenantId, branchId, status, createdAt])
 }
 
 model OrderItem {
