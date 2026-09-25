@@ -59,6 +59,8 @@ flowchart LR
 
 The monorepo keeps the Next.js interface, NestJS business rules, shared typed API contracts, and Prisma schema in separate packages. It deploys as one web app, one API replica, and PostgreSQL; browser printing and existing devices are enough for v1. The sections below cover [local setup](#local-setup), [correctness](#correctness-and-isolation), and [production deployment](#production-deployment).
 
+See the [system architecture reference](docs/ARCHITECTURE.md) for the complete entity relationship diagram, internal and external service maps, security boundaries, order and payment sequences, and deployment topology.
+
 ## Local setup
 
 Requires Node.js 22.12+, npm, and PostgreSQL. Docker Compose can provide the local database.
