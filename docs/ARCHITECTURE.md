@@ -475,7 +475,7 @@ flowchart TD
   paid -->|Optional refund| refundRequest --> reserve --> transfer --> complete --> refunded
 ```
 
-The current application does not contact PromptPay or a bank. QR generation uses the configured recipient ID and server-calculated amount. Uploaded or customer-entered evidence would remain unverified until staff checks the receiving account.
+The current application does not contact PromptPay or a bank. QR generation uses the configured recipient ID and server-calculated amount. Uploaded or customer-entered evidence would remain unverified until staff checks the receiving account. The [payment architecture guide](PAYMENTS.md) describes the exact current implementation, manual reconciliation improvements, slip-assisted review limits, and provider-ready design.
 
 ## External and internal service structure
 

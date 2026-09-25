@@ -16,6 +16,8 @@ The integration uses [Resend's Send Email API](https://resend.com/docs/api-refer
 
 ## PromptPay: choose a payment provider before enabling automatic confirmation
 
+The focused [payment architecture guide](PAYMENTS.md) documents every current payment path and compares manual confirmation, local slip assistance, bank-statement import, direct-bank integration, gateway webhooks, reconciliation, and refund evolution.
+
 Orderly currently creates an amount-filled PromptPay QR for a branch's configured recipient ID. This QR has **no transaction reference that Orderly can verify**. It stays pending until a staff member confirms the deposit in the receiving bank account. The customer can press **I have paid** and optionally enter the reference shown by their bank. This only creates a review claim; it never marks the order paid.
 
 For the no-provider workflow:
