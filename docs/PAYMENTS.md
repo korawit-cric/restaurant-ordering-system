@@ -179,9 +179,264 @@ Provider capabilities, limits, pricing, settlement timing, refund support, and p
 
 ### Direct bank or acquirer integration
 
-A restaurant may contract directly with its receiving bank for merchant QR creation, payment notification, transaction inquiry, and settlement reports. This removes the gateway intermediary but still uses an external financial service and normally requires commercial onboarding, credentials, network access rules, certificates or signed requests, test certification, and bank-specific operations.
+A restaurant may contract directly with its acquiring bank for merchant QR creation, payment notification, transaction inquiry, settlement reporting, and sometimes same-day void/refund operations. “Direct” means Orderly calls the bank's contracted merchant API instead of a gateway. It does not mean reading a personal bank account, scraping online banking, automating a mobile app, or deriving confirmation from the QR payload.
 
-The adapter and data model should be the same shape as a gateway integration. Only the provider-specific transport, credentials, statuses, and reconciliation format should differ. Do not build against undocumented consumer banking endpoints or automate a mobile banking application.
+This route gives strong transaction identity and direct settlement to the merchant, but it has a much higher onboarding and operational cost than locally generated PromptPay QR. It is usually appropriate when a tenant is a Thai legal entity with enough volume and technical support, or when Orderly has a bank-approved management-system-provider/platform agreement.
+
+#### What Thai banks currently expose
+
+The exact product and contract must be selected before implementation because each bank has different identifiers, signatures, callback behavior, settlement files, limits, and refund windows.
+
+- [KBank QR API](https://www.kasikornbank.com/th/business/sme/financial-services/pages/qr-api.aspx) documents server-created dynamic Thai QR with a ten-minute lifetime, payment notification callbacks, payment inquiry, void, and settlement. Its direct API onboarding is limited to legal entities and includes portal testing, pre-screening, UAT, bank contact, and production connection approval. The current [merchant application](https://www.kasikornbank.com/th/business/sme/financial-services/collection-solutions/Documents/EDC_ApplicationForm_EN.pdf) asks for transmission and callback IP addresses, a callback URL, and a client certificate; commercial fees and limits remain subject to the merchant agreement.
+- [Bangkok Bank QR Payment](https://apiportal.bangkokbank.com/en/api/qr-payment) is also corporate-only and requires testing, connection-information exchange, a service agreement, and a public certificate. Its [published API specification](https://apiportal.bangkokbank.com/en/api/qr-payment/api-documents) describes OAuth 2.0 client credentials, request-specific RS256 JWT signatures, unique request references, QR generation, authenticated payment notification, payment inquiry, and settlement-related flows. The bank states that failed notifications are retried up to three times, so Orderly must still perform inquiry and reconciliation.
+- [SCB Payment Gateway and Dynamic QR API](https://www.scb.co.th/th/sme-banking/payment-solution/payment-solution-products/scb-payment-gateway) advertises Thai QR dynamic generation and bank settlement for registered merchants. Detailed production credentials, callbacks, status codes, reports, and certification are supplied through merchant onboarding and must be treated as contract-specific.
+
+KBank also distinguishes a merchant connecting directly from one connecting through a management-system provider. That distinction matters for this SaaS: restaurant-owned bank contracts and a platform collection model are legally and operationally different. Do not route many tenants through one merchant account unless the acquiring bank has explicitly approved Orderly for that fund flow.
+
+#### Decide the merchant model first
+
+Use one of these models and record the decision before writing an adapter:
+
+1. **Tenant-owned merchant account:** each restaurant signs with the bank, owns the settlement account, and supplies credentials or a credential grant for its branch. Orderly acts as its software processor. This provides the clearest isolation and settlement trail, but onboarding every tenant is slower.
+2. **Bank-approved platform or management-system-provider model:** Orderly contracts with the bank to onboard and identify sub-merchants. The bank contract must specify merchant identity, settlement, refunds, support, KYC/CDD responsibilities, and permitted credential/token handling. A normal single-merchant agreement is not enough.
+3. **Gateway/acquirer account:** a licensed provider handles merchant onboarding and exposes a common API. This is often the practical first automatic-payment integration even though an additional intermediary and fee are involved.
+
+For the first production release, prefer tenant-owned merchant accounts unless a bank has already approved the platform model. The frontend must never select a merchant by sending `tenantId`, `merchantId`, or `billerId`; the API resolves the account from the QR destination's tenant and branch.
+
+#### Recommended product choice for Orderly
+
+Direct-bank integration should be an optional advanced payment connection, not the default self-setup path. The documented corporate eligibility, commercial onboarding, infrastructure information, UAT, and certificate exchange conflict with the product goal that a small stall or café can register and begin using Orderly without support.
+
+Keep locally generated PromptPay plus manual confirmation as the universal baseline. For automatic confirmation, evaluate a gateway with supported merchant/sub-merchant onboarding first. Offer a direct-bank adapter to larger tenants that already have a compatible merchant contract, or after Orderly signs an approved platform/management-system-provider agreement.
+
+If a direct adapter is commissioned, Bangkok Bank is a practical technical reference because its public specification exposes the complete create-notify-inquire pattern and detailed authentication requirements. This is not a commercial recommendation: choose the first production bank from signed pricing, onboarding fit, settlement/refund capability, support, and sandbox access. Do not implement a production adapter from public documentation alone.
+
+#### Information to obtain from the bank
+
+The public documentation is not the complete production contract. Obtain and version the following before implementation:
+
+- sandbox and production base URLs
+- merchant, biller, terminal, store, and branch identifiers and their uniqueness rules
+- QR-create, QR-cancel, payment-inquiry, refund/void, and settlement-report specifications
+- OAuth/client-secret, mTLS, JWT/signature, encryption, and callback-authentication requirements
+- the exact signed bytes or canonical JSON rules, accepted clock skew, nonce/request-reference rules, and key-rotation procedure
+- callback source controls, retry schedule, timeout, required acknowledgement body, and event ordering guarantees
+- status and error-code mapping, including whether an HTTP 200 can carry a business failure
+- QR expiry, late-payment behavior, inquiry retention, void/refund cutoff, partial-refund support, and cross-bank behavior
+- settlement timing, fee/tax fields, report transport such as API or SFTP, and reconciliation identifiers
+- sandbox test cases, certification evidence, go-live checklist, production support contacts, and incident escalation
+- static outbound IP, inbound allowlist, DNS/TLS certificate, and client-certificate requirements
+
+Do not copy sandbox sample credentials or sample signing code into production. Store the signed contract version and provider-spec version with the adapter runbook so a bank change can be assessed against the deployed code.
+
+#### Provider boundary in NestJS
+
+Replace the current QR-only `PaymentService` with an orchestrator and small provider adapters. Provider DTOs and bank status codes stay inside each adapter; the ordering domain sees normalized results.
+
+```ts
+type CreatePromptPayRequest = {
+  accountId: string;
+  merchantReference: string;
+  amount: string; // exact THB decimal from Prisma; never a JS-calculated total
+  currency: 'THB';
+  expiresAt: Date;
+};
+
+type ProviderPayment = {
+  providerPaymentId: string;
+  providerReference?: string;
+  status: 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
+  amount: string;
+  currency: 'THB';
+  qrPayload?: string;
+  expiresAt?: Date;
+  paidAt?: Date;
+};
+
+interface PromptPayProvider {
+  createPayment(input: CreatePromptPayRequest): Promise<ProviderPayment>;
+  inquirePayment(input: {
+    accountId: string;
+    merchantReference: string;
+    providerPaymentId?: string;
+  }): Promise<ProviderPayment>;
+  authenticateWebhook(input: {
+    headers: Record<string, string | string[] | undefined>;
+    rawBody: Buffer;
+    account: MerchantPaymentAccount;
+  }): Promise<AuthenticatedProviderEvent>;
+  cancelQr?(input: ProviderPaymentIdentity): Promise<ProviderPayment>;
+  createRefund?(input: ProviderRefundRequest): Promise<ProviderRefundResult>;
+  inquireRefund?(input: ProviderRefundIdentity): Promise<ProviderRefundResult>;
+}
+```
+
+Suggested API module layout:
+
+```text
+apps/api/src/payments/
+  payments.module.ts
+  payment-orchestrator.service.ts
+  payment-state.service.ts
+  payment-reconciliation.service.ts
+  provider-registry.ts
+  webhooks.controller.ts
+  providers/
+    provider.ts
+    bangkok-bank.adapter.ts
+    kbank.adapter.ts
+```
+
+Implement one adapter first. Do not add empty adapters for banks that have not supplied sandbox access and a merchant contract.
+
+#### Database changes
+
+Keep `Order.paymentStatus` and `OrderSession.paymentStatus` as fast operational summaries. Add durable evidence rather than replacing those fields immediately:
+
+- `MerchantPaymentAccount`: tenant, branch, provider, environment, onboarding state, safe merchant/biller/terminal identifiers, masked settlement destination, and secret-manager references. Add a composite foreign key to the owning branch and a tenant/branch/active index.
+- `PaymentAttempt`: tenant, branch, merchant account, exactly one order or session target, internal merchant reference, provider payment/QR identifiers, authoritative amount and currency, status, QR payload or bank response needed to display it, expiry, provider-paid time, last inquiry time, and failure code.
+- `PaymentEvent`: account and attempt scope, provider event ID or deterministic hash, event type, received time, signature/authentication result, processing state, payload hash, safe error details, and optional protected raw payload.
+- `RefundAttempt`: original payment attempt, requested amount, internal idempotency key, provider refund ID/reference, status, request/response timestamps, failure code, and actor.
+- `SettlementBatch` and `SettlementLine`: provider report identity, period, gross, fee, net, settlement date, provider transaction reference, matched attempt/refund, and reconciliation state.
+
+Use database constraints in the SQL migration where Prisma cannot express them:
+
+- exactly one of `orderId` or `sessionId` is non-null
+- amount is greater than zero and currency is `THB` for the first adapter
+- `(merchantPaymentAccountId, merchantReference)` is unique
+- provider payment IDs and event IDs are unique within the merchant account and environment
+- refund totals cannot exceed the captured payment; enforce this under a locked payment row in the service as well as with transactional checks
+
+Continue storing order totals as Prisma `Decimal`. Convert to the bank's required representation once inside the adapter, using decimal/string or integer satang according to that bank's specification. Never pass a total through JavaScript floating-point arithmetic.
+
+#### Payment-attempt creation
+
+Creating a bank QR is a side effect, so introduce a `POST` endpoint instead of extending the current `GET .../promptpay` behavior:
+
+- per order: `POST /api/public/:kind/:token/orders/:id/payment-attempts`
+- closed session checkout: `POST /api/staff/sessions/:id/payment-attempts`
+- customer order polling remains `GET /api/public/:kind/:token/orders/:id`
+
+The request carries a client idempotency key, not an amount or merchant account. The server loads the tenant-scoped order/session, verifies it is `PROMPTPAY / PENDING`, reads its authoritative total, and resolves the active branch merchant account.
+
+Do not hold a database transaction open while calling the bank:
+
+1. In a short transaction, lock the target payment, return an existing usable attempt for the same idempotency key, or create `PaymentAttempt(CREATING)` with a unique merchant reference.
+2. Commit, then call `provider.createPayment` with the stored reference and authoritative amount.
+3. In a second transaction, store the provider ID, QR payload, expiry, and normalized `PENDING` state.
+4. If the call returns a definite rejection, mark the attempt `FAILED` with a safe code.
+5. If the call times out after transmission, leave the attempt in an uncertain state and inquire by the same merchant reference. Do not generate another reference until inquiry proves the first request did not create a payment.
+
+Allow only one active, unexpired attempt for a target unless the old QR is cancelled or expired. If a replacement is needed, cancel the earlier QR when the provider supports it and keep both attempts for audit. A late success for an older attempt must still be reconciled; never discard it because the customer is viewing a newer QR.
+
+#### Webhook and callback implementation
+
+The current `BoundaryMiddleware` rejects every non-browser write without the application's `Origin`, so a bank callback would receive `403`. Refactor it before enabling a webhook:
+
+- apply browser origin/content-type checks to browser routes
+- exempt only the exact `/webhooks/payments/:provider/:accountToken` routes from browser-origin checks
+- give webhooks their own body limit, rate limit, content-type validation, authentication, and logging policy
+- enable Nest's raw request body support with `NestFactory.create(AppModule, { rawBody: true })` when the bank signature covers raw bytes
+- never log authorization headers, private identifiers, full payloads, or secrets
+
+Use a random account-routing token in the callback URL where the bank supports per-account URLs. Treat it only as a routing hint. Authenticate with the bank's required Basic credential, signature/JWT, mTLS certificate, or documented combination, then match the authenticated merchant/biller identity to `MerchantPaymentAccount`. Source-IP allowlisting can be an additional control but must not replace cryptographic or contracted callback authentication.
+
+Callback processing should be idempotent and durable:
+
+1. Reject oversized or malformed requests before parsing business fields.
+2. Identify a candidate account from the route token, then authenticate exactly as the provider contract requires.
+3. Calculate a payload hash and derive the provider event identifier.
+4. Insert `PaymentEvent` under a unique constraint before acknowledging it; a duplicate returns the same successful acknowledgement without repeating state changes.
+5. Resolve the attempt by the stored merchant/provider reference under the same merchant account. Never trust a callback-supplied tenant ID.
+6. When supported, call payment inquiry and use that authenticated response as the final status source.
+7. Compare merchant/biller/terminal, internal reference, provider payment ID, exact amount, currency, and final status.
+8. In one database transaction, lock the attempt and order/session, apply a legal transition, set the attempt `SUCCEEDED`, project `PAID`, `paidAt`, and provider reference onto the target, and mark the event processed.
+9. Commit before publishing the branch SSE change.
+10. Quarantine mismatches or unknown references for operator review; acknowledge only according to the bank retry contract.
+
+The callback controller should remain thin. Signature/authentication belongs in the adapter; normalized transition and tenant checks belong in `PaymentStateService`.
+
+#### Direct-bank sequence
+
+```mermaid
+sequenceDiagram
+  participant Customer
+  participant API as NestJS payment orchestrator
+  participant DB as PostgreSQL
+  participant Bank as Acquiring bank
+  participant Staff as Staff dashboard
+
+  Customer->>API: POST payment attempt with idempotency key
+  API->>DB: Lock target and create CREATING attempt
+  API->>Bank: Create dynamic QR with merchant reference and amount
+  Bank-->>API: Provider payment ID, QR, expiry
+  API->>DB: Store PENDING attempt
+  API-->>Customer: QR and expiry
+  Customer->>Bank: Pay with banking app
+  Bank->>API: Authenticated payment notification
+  API->>DB: Insert deduplicated PaymentEvent
+  API->>Bank: Inquire when required
+  Bank-->>API: Authoritative final payment data
+  API->>DB: Lock, compare, mark attempt SUCCEEDED and target PAID
+  API-->>Bank: Contract-specific acknowledgement
+  API-->>Staff: Publish branch change after commit
+```
+
+#### Inquiry, expiry, and reconciliation
+
+A webhook is a fast signal, not the accounting record. Add a durable command such as `npm run payments:reconcile` and run it every one to five minutes for pending attempts, plus a daily settlement pass. In the current single-API deployment this can be a separate scheduled process or platform cron invoking a Nest application command; use a PostgreSQL advisory lock so two runs do not process the same batch.
+
+The pending pass should claim bounded rows with `FOR UPDATE SKIP LOCKED`, inquire attempts whose callback is late, expire only when the bank's status and expiry rules permit it, and back off after transient errors. Use database time and store the next inquiry time rather than scanning every historical attempt.
+
+The daily pass imports or retrieves the bank settlement report and matches by merchant account plus provider reference. Record gross, fee, net, refund/void, and settlement date separately. A payment can be provider-verified but not yet settled, so expose both states. Alerts should cover:
+
+- authenticated success callback with no matching attempt
+- amount, currency, or merchant mismatch
+- callback/inquiry disagreement
+- a pending attempt beyond QR expiry plus tolerance
+- paid attempt missing from the expected settlement batch
+- settlement line without a known payment
+- duplicate provider reference or event ID
+- credential expiry, signature failures, and sustained inquiry failure
+
+Do not change a confirmed payment back to pending because a later callback is older or ambiguous. Store the event, flag it, and resolve it through inquiry and reconciliation.
+
+#### Direct-bank refunds and voids
+
+Treat QR cancellation, payment void, and post-settlement refund as different operations:
+
+- **Cancel QR:** prevents or discourages future payment against an unused QR. It does not return money.
+- **Void/reversal:** reverses a completed transaction inside a provider-defined same-day settlement window.
+- **Refund:** sends money back after payment, potentially through a separate API and settlement cycle.
+
+The public [Bangkok Bank specification](https://apiportal.bangkokbank.com/en/api/qr-payment/api-documents) describes refund verification, refund advice, and refund reversal, with the documented flow requiring action before 23:00 on the payment day. KBank publicly lists void as a QR API capability. Availability, partial amounts, cutoff, retry rules, and cross-bank behavior must come from the signed merchant contract.
+
+Implement `RefundAttempt` as a separate state machine such as `REQUESTED`, `SUBMITTING`, `PENDING`, `SUCCEEDED`, `FAILED`, `REVERSED`, and `CANCELLED`. Lock the captured payment and reserve the amount before calling the bank. For a timeout, inquire or follow the bank's reversal procedure; never create a second refund blindly. Mark the existing `ManualRefund` completed only after a provider refund has a final successful result, or keep provider refunds as their own records and include both sources in net-sales reporting.
+
+After the bank's API cutoff or when the channel does not support refunds, use the existing manual bank-transfer/cash process. The UI should identify `PROVIDER_VOID`, `PROVIDER_REFUND`, and `MANUAL_REFUND` so staff and reports do not imply that Orderly moved money when it did not.
+
+#### Credential and network setup
+
+Use separate sandbox and production accounts. Keep client secrets and private keys in a deployment secret manager, and store only secret references and safe identifiers in PostgreSQL. Generate private keys in the target secret system or import them once through a controlled process; restrict access to the payment adapter runtime. Track certificate/key expiry and rehearse overlapping rotation before go-live.
+
+If the bank requires source-IP allowlisting, deploy outbound traffic through a stable egress IP. If it requires mTLS, configure a dedicated HTTP client/agent with the tenant account's certificate and key; do not globally attach one tenant's certificate to all provider requests. Terminate public TLS for callbacks with a normal trusted certificate unless the bank contract specifies mTLS at ingress. Keep callback URLs stable and HTTPS-only.
+
+Timeouts should be shorter than the browser request timeout, with bounded retries only for operations the bank defines as idempotent. Log internal attempt ID, merchant reference, provider request ID, latency, normalized result, and safe error code. Redact account IDs where required and never log secrets, access tokens, complete JWTs, QR payloads containing merchant references, or raw bank responses by default.
+
+#### Concrete repository implementation sequence
+
+1. **Select and onboard one bank.** Obtain sandbox credentials, merchant identifiers, certificates, callback requirements, status map, settlement format, refund rules, and UAT cases. Decide tenant-owned versus approved platform accounts.
+2. **Add the domain migration.** Create `MerchantPaymentAccount`, `PaymentAttempt`, `PaymentEvent`, `RefundAttempt`, and settlement records with composite tenant/branch keys and SQL constraints.
+3. **Add the provider module.** Introduce the normalized interface, registry, orchestrator, state service, and one bank adapter. Keep the existing locally generated manual PromptPay path available.
+4. **Create payment attempts.** Add idempotent `POST` endpoints, two-phase bank creation, QR expiry display, refresh behavior, and late-payment handling.
+5. **Accept callbacks safely.** Refactor `BoundaryMiddleware`, enable raw body, implement exact provider authentication, persist/deduplicate events, inquire, validate, and transactionally update payment state.
+6. **Add reconciliation.** Run pending inquiry and daily settlement import under advisory locks, with operator review for mismatches.
+7. **Add provider refunds only if contracted.** Implement the bank's precise verification/advice/reversal or refund flow; retain manual fallback.
+8. **Certify and roll out.** Pass bank UAT, deploy production credentials, run low-value same-bank and cross-bank payments, test missed callbacks and timeouts, reconcile settlement, and enable one tenant/branch behind a feature flag.
+
+Tests must include cross-tenant merchant IDs, duplicate create requests, timeout after bank acceptance, duplicate and out-of-order callbacks, invalid signatures, callback for the wrong merchant, exact-amount mismatch, old-QR late payment, concurrent callback/inquiry, QR expiry, missed callback recovery, settlement mismatch, refund timeout, refund double submission, and credential rotation.
+
+The likely code changes are concentrated in `apps/api/src/payments`, `apps/api/src/main.ts`, `apps/api/src/security/boundary.ts`, `packages/prisma/prisma/schema.prisma`, a new Prisma migration, `packages/api-client`, and the customer/staff payment components. No WebSocket, Redis, microservice, or general event bus is required for the first adapter.
 
 ### Slip-verification API
 
@@ -348,7 +603,13 @@ For every payment path, verify:
 
 - [Bank of Thailand: PromptPay overview](https://www.bot.or.th/en/financial-innovation/digital-finance/digital-payment/promptpay.html)
 - [Bank of Thailand: Thai QR Payment Standard](https://www.bot.or.th/content/dam/bot/documents/th/our-roles/payment-systems/about-payment-systems/ThaiQRCode_Payment_Standard.pdf)
+- [KBank: QR API product and onboarding](https://www.kasikornbank.com/th/business/sme/financial-services/pages/qr-api.aspx)
+- [KBank: merchant service application and technical connection fields](https://www.kasikornbank.com/th/business/sme/financial-services/collection-solutions/Documents/EDC_ApplicationForm_EN.pdf)
+- [Bangkok Bank: QR Payment overview](https://apiportal.bangkokbank.com/en/api/qr-payment)
+- [Bangkok Bank: QR Payment API specification](https://apiportal.bangkokbank.com/en/api/qr-payment/api-documents)
+- [SCB: Payment Gateway and Dynamic QR API](https://www.scb.co.th/th/sme-banking/payment-solution/payment-solution-products/scb-payment-gateway)
 - [Opn/Omise: PromptPay](https://docs.omise.co/en/promptpay/thailand)
 - [Opn/Omise: webhooks](https://docs.omise.co/api-webhooks/thailand)
 - [Xendit: PromptPay channel](https://docs.xendit.co/docs/qr-promptpay)
 - [Xendit: payment webhook notification](https://docs.xendit.co/apidocs/payment-webhook-notification)
+- [NestJS: raw request body](https://docs.nestjs.com/faq/raw-body)
