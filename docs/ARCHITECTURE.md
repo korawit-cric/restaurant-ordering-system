@@ -451,39 +451,28 @@ The client sends `expectedPrice` only to detect that its menu became stale. Nest
 ## Current PromptPay and refund lifecycle
 
 ```mermaid
-sequenceDiagram
-  actor Customer
-  participant Web as Customer UI
-  participant API as NestJS API
-  participant DB as PostgreSQL
-  actor Staff
-  actor Manager
-  participant BankApp as Restaurant bank app
+flowchart TD
+  instructions["API reads the branch PromptPay recipient"]
+  qr["Customer UI displays a locally generated amount-specific QR"]
+  bankPayment["Customer pays in their mobile banking app"]
+  claim["Customer submits a payment claim"]
+  stored["API stores the claim as SUBMITTED and signals staff"]
+  bankCheck["Staff checks the receiving bank account"]
+  matched{"Does the deposit match?"}
+  confirm["Staff records the receiving-bank reference"]
+  paid["API marks payment PAID and claim VERIFIED"]
+  reject["Staff rejects the claim with a reason"]
+  pending["API marks claim REJECTED; payment remains PENDING"]
+  refundRequest["Staff creates a full or partial refund request"]
+  reserve["API reserves the amount and prevents over-refunding"]
+  transfer["Manager returns money by bank transfer or cash"]
+  complete["Manager records the external reference"]
+  refunded["API marks refund COMPLETED; original order remains PAID"]
 
-  Web->>API: Request PromptPay instructions
-  API->>DB: Read branch PromptPay recipient
-  API-->>Web: Locally generated amount-specific QR
-  Customer->>BankApp: Pay through mobile banking
-  Customer->>Web: I have paid plus optional customer reference
-  Web->>API: Submit payment claim
-  API->>DB: Store SUBMITTED claim
-  API-->>Staff: SSE change signal
-  Staff->>BankApp: Independently inspect receiving account
-  alt Deposit matches
-    Staff->>API: Confirm with receiving-bank reference
-    API->>DB: Mark payment PAID and claim VERIFIED
-  else Deposit cannot be matched
-    Staff->>API: Reject claim with reason
-    API->>DB: Mark claim REJECTED; payment stays PENDING
-  end
-
-  opt Full or partial refund
-    Staff->>API: Create refund request
-    API->>DB: Reserve amount; prevent total above original payment
-    Manager->>BankApp: Return money by transfer or cash outside Orderly
-    Manager->>API: Complete with external reference
-    API->>DB: Mark refund COMPLETED; original order remains PAID
-  end
+  instructions --> qr --> bankPayment --> claim --> stored --> bankCheck --> matched
+  matched -->|Yes| confirm --> paid
+  matched -->|No| reject --> pending
+  paid -->|Optional refund| refundRequest --> reserve --> transfer --> complete --> refunded
 ```
 
 The current application does not contact PromptPay or a bank. QR generation uses the configured recipient ID and server-calculated amount. Uploaded or customer-entered evidence would remain unverified until staff checks the receiving account.
