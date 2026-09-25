@@ -59,7 +59,7 @@ flowchart LR
 
 The monorepo keeps the Next.js interface, NestJS business rules, shared typed API contracts, and Prisma schema in separate packages. It deploys as one web app, one API replica, and PostgreSQL; browser printing and existing devices are enough for v1. The sections below cover [local setup](#local-setup), [correctness](#correctness-and-isolation), and [production deployment](#production-deployment).
 
-See the [system architecture reference](docs/ARCHITECTURE.md) for the complete entity relationship diagram, internal and external service maps, security boundaries, order and payment sequences, and deployment topology. The [payment architecture guide](docs/PAYMENTS.md) documents the current cash, PromptPay, payment-claim, and refund behavior plus manual, slip-assisted, direct-bank, and gateway improvement paths.
+See the [system architecture reference](docs/ARCHITECTURE.md) for the complete entity relationship diagram, internal and external service maps, security boundaries, order and payment sequences, and deployment topology. The [payment architecture guide](docs/PAYMENTS.md) documents the current cash, PromptPay, payment-claim, and refund behavior plus manual, slip-assisted, direct-bank, and gateway improvement paths. The [subscription lifecycle guide](docs/SUBSCRIPTIONS.md) explains current trial and branch-limit behavior plus the proposed scheduler, access policy, notification outbox, and billing-provider boundary.
 
 ## Local setup
 
