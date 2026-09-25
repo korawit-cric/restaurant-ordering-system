@@ -5,7 +5,7 @@ This guide explains how Orderly handles payment today, what the current records 
 The recommended product direction is:
 
 1. Keep the current manual workflow as the dependable baseline and fallback.
-2. Strengthen reference capture, duplicate detection, reconciliation, and refund reporting.
+2. Strengthen per-payment reference capture, duplicate detection, audit history, and refund reporting.
 3. Add optional slip-assisted review only to reduce staff typing; never treat locally parsed evidence as settlement proof.
 4. Add automatic confirmation through a tenant-scoped bank or payment-provider adapter when transaction volume justifies merchant onboarding and provider fees.
 
@@ -80,22 +80,47 @@ Common failure cases are:
 
 This path keeps the platform independent of payment gateways and bank APIs. It can make manual work safer and faster, but a human or a trusted merchant-supplied bank record must remain in the confirmation loop.
 
+### Chosen low-cost v1 boundary
+
+Orderly does not require bank-statement import, daily reconciliation batches, slip upload, OCR, or a live payment provider for v1. Staff checks each PromptPay deposit in the restaurant's banking app and records that decision against the individual order or closed session.
+
+The minimum durable record is:
+
+- order or session ID, tenant, and branch
+- server-calculated payment amount and method
+- `PENDING` or `PAID` status
+- receiving-bank transaction reference for PromptPay
+- Orderly confirmation time and confirming staff user
+- optional confirmation note
+
+The current `paidAt` field means the time staff confirmed payment in Orderly. Reports based on it are operational records of staff-confirmed payments, not bank-settlement or bank-reconciled reports. The UI and exported reports should use that language explicitly.
+
+Because the current branch configuration has one PromptPay recipient, a branch-scoped unique constraint on non-null PromptPay references is enough for the first hardening step. If a branch later supports multiple receiving accounts, replace that rule with uniqueness on `(receivingAccountId, externalReference)`.
+
+This boundary keeps the restaurant workflow fast and cheap:
+
+1. Customer submits an order and receives the amount-specific PromptPay QR.
+2. Customer optionally sends the bank reference through **I have paid**.
+3. Staff checks the banking app for the exact deposit.
+4. Staff confirms or rejects the claim.
+5. Orderly records the manual decision and prevents reuse of the same reference.
+
+Daily bank reconciliation remains an optional restaurant accounting procedure outside Orderly. It should become an application feature only when real operators report enough mistakes or closing-time effort to justify the added formats, sensitive data, and UI.
+
 ### Harden manual confirmation first
 
-Add a branch payment configuration that identifies the receiving account separately from the public PromptPay ID. Store only safe display data such as an account nickname, bank code, masked account, and expected recipient name. Do not store online-banking credentials.
+Keep the existing per-branch PromptPay configuration for v1 and do not store online-banking credentials. Show the expected recipient name and a masked recipient identifier where useful so staff and customers can detect configuration mistakes.
 
 When staff confirms PromptPay, record:
 
-- receiving account ID
 - bank transaction reference
-- bank transaction time, if visible
 - received amount
 - confirmation time and confirming user
-- optional discrepancy/reconciliation note
+- optional confirmation note
 
-Enforce uniqueness for a non-null external reference within the same receiving account. A safer database key is `(receivingAccountId, externalReference)` rather than global reference uniqueness because reference formats differ between banks. A duplicate should block confirmation and show the order that already uses the reference.
+Enforce uniqueness for a non-null PromptPay reference within the branch. A duplicate should block confirmation and show the order or session that already uses the reference. Normalize only harmless formatting such as surrounding whitespace; do not rewrite a bank reference into a different value.
 
-Keep `bankPaidAt` separate from `confirmedAt`. The current `paidAt` is the time staff confirms inside Orderly; treating it as the bank transaction time makes reconciliation and day-boundary reports inaccurate.
+Keep the current `paidAt` as the confirmation time and label it accordingly. Add a separate `bankPaidAt` only if staff later needs to capture the transaction time displayed by the bank.
 
 Add a payment review queue with filters for:
 
@@ -103,10 +128,9 @@ Add a payment review queue with filters for:
 - pending longer than a branch threshold
 - duplicate or missing reference
 - amount mismatch
-- payment confirmed but not reconciled
 - refund pending completion
 
-At daily close, staff should compare confirmed PromptPay totals with the receiving bank's transactions and explicitly close a reconciliation batch. Differences remain visible until resolved.
+No daily reconciliation sign-off is required in Orderly v1. A restaurant may still compare the operational payment report with its bank outside the application.
 
 ### Optional slip upload as review assistance
 
@@ -128,9 +152,9 @@ Parsing a valid QR or matching OCR text increases review confidence only. A forg
 
 Suggested evidence states are `UPLOADED`, `PARSED`, `NEEDS_REVIEW`, `ACCEPTED`, `REJECTED`, and `PURGED`. Store why a match was suggested and who accepted it. Do not store customer bank details longer than the operational and legal retention policy requires.
 
-### Manual bank-statement import
+### Optional future bank-statement import
 
-A statement import can provide better batch reconciliation without a live API. The restaurant downloads a CSV or supported report from its receiving bank and uploads it from an authenticated staff page.
+A statement import is explicitly deferred from v1. It may provide better batch reconciliation later without a live API: the restaurant downloads a CSV or supported report from its receiving bank and uploads it from an authenticated staff page.
 
 Implement each bank format as a narrow parser. Stage imported rows before affecting payments, hash the source file, deduplicate bank transactions by receiving account and reference, and show proposed matches using exact amount, reference, and time. Staff approves the batch or individual matches. Preserve the original import, parser version, actor, and decision log for the chosen retention period.
 
@@ -141,25 +165,19 @@ This is still staff-supplied evidence and should be labeled `MANUAL_IMPORT`, not
 ```mermaid
 flowchart TD
   pending["Order or session payment is PENDING"]
-  method{"Evidence path"}
-  claim["Customer enters a reference"]
-  slip["Customer uploads a slip"]
-  statement["Staff imports a bank statement"]
-  assist["Orderly extracts, matches, and flags duplicates"]
-  review["Staff checks the receiving account or trusted statement"]
-  match{"Exact payment found?"}
-  paid["Record receiving account, bank reference, bank time, confirmer; mark PAID"]
-  rejected["Reject evidence or leave payment PENDING"]
-  reconcile["Include payment in daily reconciliation batch"]
+  claim["Customer optionally enters a bank reference"]
+  review["Staff checks the restaurant banking app"]
+  match{"Exact deposit found?"}
+  duplicate{"Reference already used in this branch?"}
+  paid["Record amount, reference, confirmation time, and staff user; mark PAID"]
+  rejected["Reject the claim or leave payment PENDING"]
+  report["Include in operational payment and refund reports"]
 
-  pending --> method
-  method --> claim --> review
-  method --> slip --> assist --> review
-  method --> statement --> assist
-  review --> match
-  assist --> match
-  match -->|Yes| paid --> reconcile
+  pending --> claim --> review --> match
   match -->|No| rejected
+  match -->|Yes| duplicate
+  duplicate -->|Yes| rejected
+  duplicate -->|No| paid --> report
 ```
 
 ## Improvements with an external payment service
@@ -552,13 +570,13 @@ If a selected provider and payment channel later supports refunds, create a prov
 
 ### Phase 1: improve the existing manual system
 
-1. Add receiving payment accounts with safe display fields.
-2. Require and deduplicate PromptPay receiving-bank references.
-3. Separate bank transaction time from staff confirmation time.
-4. Add pending-payment and daily reconciliation views.
-5. Report gross payments, completed refunds, and net receipts separately.
+1. Require PromptPay receiving-bank references when staff confirms payment.
+2. Prevent reuse of a non-null PromptPay reference within a branch.
+3. Make the UI and reports label `paidAt` as staff confirmation time.
+4. Add a focused pending-payment review view.
+5. Report confirmed payments and completed manual refunds separately, clearly labeled as operational records.
 6. Add role/amount rules for confirmation and refunds.
-7. Test concurrent confirmation, duplicate references, day boundaries, refunds, and tenant isolation.
+7. Test concurrent confirmation, duplicate references, refunds, and tenant isolation.
 
 This phase provides the largest reliability gain without payment-provider dependency.
 
