@@ -238,16 +238,16 @@ type CreatePromptPayRequest = {
   accountId: string;
   merchantReference: string;
   amount: string; // exact THB decimal from Prisma; never a JS-calculated total
-  currency: "THB";
+  currency: 'THB';
   expiresAt: Date;
 };
 
 type ProviderPayment = {
   providerPaymentId: string;
   providerReference?: string;
-  status: "PENDING" | "SUCCEEDED" | "FAILED" | "EXPIRED" | "CANCELLED";
+  status: 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'EXPIRED' | 'CANCELLED';
   amount: string;
-  currency: "THB";
+  currency: 'THB';
   qrPayload?: string;
   expiresAt?: Date;
   paidAt?: Date;
